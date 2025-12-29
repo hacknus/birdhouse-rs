@@ -1,0 +1,58 @@
+/* Background overlay */
+.aarewasser {
+    background-color: #2be6ff;
+    background-size: auto; /* Keeps original pattern size */
+    background-repeat: repeat; /* Repeat the pattern */
+    background-position: top left; /* Align pattern from the top left */
+    min-height: 100vh; /* Ensure it covers full height */
+}
+
+
+.container {
+    color: #306FB2;
+    font-size: 1.5rem;
+}
+
+/* Wrapper ensures the number and degree symbol stay together */
+.temp-wrapper {
+    display: flex;
+    justify-content: center;
+    align-items: center;
+    gap: 4px;
+}
+
+/* Temperature styling */
+.temperature_big, .temperature {
+    display: flex;
+    justify-content: center;
+    align-items: center;
+    font-family: 'DINNextLTPro-Condensed', sans-serif;
+    color: #306FB2;
+    font-weight: bold;
+}
+
+/* Ensure correct font sizes */
+.temperature_big span:first-child {
+    font-size: 10rem;
+}
+
+.temperature span:first-child {
+    font-size: 6rem;
+}
+
+/* Degree symbol without any position shifting */
+.degree_big {
+    font-size: 12rem;
+}
+
+.degree {
+    font-size: 6rem;
+}
+
+.mt-5 {
+    margin-top: 3rem;
+}
+
+.text-center {
+    text-align: center;
+}
