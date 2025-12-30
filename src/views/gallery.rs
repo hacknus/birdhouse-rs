@@ -1,7 +1,7 @@
 use dioxus::prelude::*;
 use serde::{Deserialize, Serialize};
-#[cfg(target_arch = "wasm32")]
-use wasm_bindgen::JsCast;
+
+use crate::views::gallery_client::{lock_scroll, save_scroll_position, unlock_scroll};
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 struct ImageInfo {
@@ -112,45 +112,19 @@ fn ImageViewer(
         }
     };
 
-    // WASM-only scroll management
-    #[cfg(target_arch = "wasm32")]
-    {
-        let mut saved_scroll_y = use_signal(|| 0.0);
+    let mut saved_scroll_y = use_signal(|| 0.0);
 
-        use_effect(move || {
-            spawn(async move {
-                if let Some(window) = web_sys::window() {
-                    let scroll_y = window.scroll_y().unwrap_or(0.0);
-                    saved_scroll_y.set(scroll_y);
-
-                    if let Some(document) = window.document() {
-                        if let Some(element) = document.query_selector("[data-viewer]").ok().flatten() {
-                            if let Some(html_element) = element.dyn_ref::<web_sys::HtmlElement>() {
-                                let _ = html_element.focus();
-                            }
-                        }
-
-                        if let Some(body) = document.body() {
-                            let style = format!("overflow: hidden; position: fixed; width: 100%; top: -{}px;", scroll_y);
-                            let _ = body.set_attribute("style", &style);
-                        }
-                    }
-                }
-            });
+    use_effect(move || {
+        spawn(async move {
+            let scroll_y = save_scroll_position();
+            saved_scroll_y.set(scroll_y);
+            lock_scroll(scroll_y);
         });
+    });
 
-        use_drop(move || {
-            if let Some(window) = web_sys::window() {
-                if let Some(document) = window.document() {
-                    if let Some(body) = document.body() {
-                        let _ = body.remove_attribute("style");
-                        let scroll_y = saved_scroll_y();
-                        let _ = window.scroll_to_with_x_and_y(0.0, scroll_y);
-                    }
-                }
-            }
-        });
-    }
+    use_drop(move || {
+        unlock_scroll(saved_scroll_y());
+    });
 
     rsx! {
         div {

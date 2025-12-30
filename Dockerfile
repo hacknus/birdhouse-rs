@@ -35,6 +35,7 @@ COPY --from=builder /app/target/dx/birdhouse-rs/release/web/public ./public
 
 ENV PORT=8080
 ENV IP=0.0.0.0
+ENV RUST_BACKTRACE=1
 
 EXPOSE 8080
 

@@ -24,4 +24,6 @@ mod gallery;
 pub use gallery::Gallery;
 
 mod makingof;
+pub mod gallery_client;
+
 pub use makingof::MakingOf;
