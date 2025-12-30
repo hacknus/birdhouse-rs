@@ -2,13 +2,36 @@ use dioxus::dioxus_core::Task;
 use dioxus::document::eval;
 use dioxus::prelude::*;
 
+#[server]
+async fn get_stream_config() -> Result<StreamConfig, ServerFnError> {
+    Ok(StreamConfig {
+        stream_url: std::env::var("STREAM_URL")
+            .unwrap_or_else(|_| "http://127.0.0.1:8889/cam".to_string()),
+        websocket_url: std::env::var("WEBSOCKET_URL")
+            .unwrap_or_else(|_| "ws://127.0.0.1:8000/ws".to_string()),
+    })
+}
+
+#[derive(Clone, serde::Serialize, serde::Deserialize)]
+struct StreamConfig {
+    stream_url: String,
+    websocket_url: String,
+}
+
 pub fn Home() -> Element {
+    let mut config = use_resource(|| async move { get_stream_config().await.ok() });
     let mut _ws_task = use_signal(|| None::<Task>);
 
+    let config_value = config.read();
+    let Some(Some(cfg)) = config_value.as_ref() else {
+        return rsx! { div { "Loading..." } };
+    };
+
+    let stream_url = cfg.stream_url.clone();
+    let ws_url = cfg.websocket_url.clone();
+
     use_effect(move || {
-        let ws_url = std::env::var("WEBSOCKET_URL")
-            .unwrap_or_else(|_| "ws://127.0.0.1:8000/ws".to_string());
-        
+        let ws_url = ws_url.clone();
         let task = spawn(async move {
             let script = format!(r#"
                 const canvas = document.getElementById("spec");
@@ -149,9 +172,6 @@ pub fn Home() -> Element {
         });
         _ws_task.set(Some(task));
     });
-
-    let stream_url = std::env::var("STREAM_URL")
-        .unwrap_or_else(|_| "http://127.0.0.1:8889/cam".to_string());
 
     rsx! {
         section {
