@@ -17,15 +17,15 @@ pub fn Navbar() -> Element {
             id: "navbar",
             Link {
                 to: Route::Home {},
-                "Home"
+                "home"
             }
             Link {
                 to: Route::Gallery {},
-                "Gallery"
+                "gallery"
             }
             Link {
                 to: Route::MakingOf {},
-                "Making Of"
+                "making of"
             }
             Link {
                 to: Route::VoguGuru {},
