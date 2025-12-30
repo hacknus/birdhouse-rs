@@ -1,6 +1,6 @@
-use std::ops::Deref;
 use dioxus::prelude::*;
 use serde::{Deserialize, Serialize};
+#[cfg(target_arch = "wasm32")]
 use wasm_bindgen::JsCast;
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
@@ -15,7 +15,6 @@ pub fn Gallery() -> Element {
     let mut loading = use_signal(|| true);
     let mut error = use_signal(|| None::<String>);
 
-    // Fetch images on component mount
     use_effect(move || {
         spawn(async move {
             match fetch_images().await {
@@ -48,7 +47,6 @@ pub fn Gallery() -> Element {
                     p { class: "text-white text-xl", "No images found" }
                 }
             } else {
-                // Image grid
                 if selected_image().is_none() {
                     div { class: "grid grid-cols-2 md:grid-cols-3 lg:grid-cols-4 gap-4",
                         for (idx, img) in images().iter().enumerate() {
@@ -68,7 +66,6 @@ pub fn Gallery() -> Element {
                         }
                     }
                 } else {
-                    // Full image view
                     ImageViewer {
                         images: images(),
                         current_index: selected_image(),
@@ -105,9 +102,7 @@ fn ImageViewer(
     };
 
     let current_image = &images[idx];
-    let mut saved_scroll_y = use_signal(|| 0.0);
 
-    // Handle keyboard events
     let handle_keydown = move |evt: KeyboardEvent| {
         match evt.key().to_string().as_str() {
             "Escape" => on_close.call(()),
@@ -117,47 +112,45 @@ fn ImageViewer(
         }
     };
 
-    // Save scroll position and prevent body scroll
-    // Save scroll position and prevent body scroll
-    use_effect(move || {
-        spawn(async move {
-            if let Some(window) = web_sys::window() {
-                // Save current scroll position
-                let scroll_y = window.scroll_y().unwrap_or(0.0);
-                saved_scroll_y.set(scroll_y);
+    // WASM-only scroll management
+    #[cfg(target_arch = "wasm32")]
+    {
+        let mut saved_scroll_y = use_signal(|| 0.0);
 
-                if let Some(document) = window.document() {
-                    // Focus the viewer
-                    if let Some(element) = document.query_selector("[data-viewer]").ok().flatten() {
-                        if let Some(html_element) = element.dyn_ref::<web_sys::HtmlElement>() {
-                            let _ = html_element.focus();
+        use_effect(move || {
+            spawn(async move {
+                if let Some(window) = web_sys::window() {
+                    let scroll_y = window.scroll_y().unwrap_or(0.0);
+                    saved_scroll_y.set(scroll_y);
+
+                    if let Some(document) = window.document() {
+                        if let Some(element) = document.query_selector("[data-viewer]").ok().flatten() {
+                            if let Some(html_element) = element.dyn_ref::<web_sys::HtmlElement>() {
+                                let _ = html_element.focus();
+                            }
+                        }
+
+                        if let Some(body) = document.body() {
+                            let style = format!("overflow: hidden; position: fixed; width: 100%; top: -{}px;", scroll_y);
+                            let _ = body.set_attribute("style", &style);
                         }
                     }
+                }
+            });
+        });
 
-                    // Prevent body scroll while maintaining position
+        use_drop(move || {
+            if let Some(window) = web_sys::window() {
+                if let Some(document) = window.document() {
                     if let Some(body) = document.body() {
-                        let style = format!("overflow: hidden; position: fixed; width: 100%; top: -{}px;", scroll_y);
-                        let _ = body.set_attribute("style", &style);
+                        let _ = body.remove_attribute("style");
+                        let scroll_y = saved_scroll_y();
+                        let _ = window.scroll_to_with_x_and_y(0.0, scroll_y);
                     }
                 }
             }
         });
-    });
-
-    // Restore scroll position on unmount
-    use_drop(move || {
-        if let Some(window) = web_sys::window() {
-            if let Some(document) = window.document() {
-                if let Some(body) = document.body() {
-                    let _ = body.remove_attribute("style");
-                    // Force scroll restoration
-                    let scroll_y = saved_scroll_y();
-                    let _ = window.scroll_to_with_x_and_y(0.0, scroll_y);
-                }
-            }
-        }
-    });
-
+    }
 
     rsx! {
         div {
@@ -166,21 +159,18 @@ fn ImageViewer(
             onkeydown: handle_keydown,
             "data-viewer": "true",
 
-            // Close button
             button {
                 class: "absolute top-4 right-4 text-white text-3xl hover:text-red-500 transition-colors z-10",
                 onclick: move |_| on_close.call(()),
                 "✕"
             }
 
-            // Previous button
             button {
                 class: "absolute left-4 text-white text-5xl hover:text-blue-500 transition-colors",
                 onclick: move |_| on_prev.call(()),
                 "‹"
             }
 
-            // Image container
             div { class: "max-w-7xl max-h-screen p-8 flex flex-col items-center",
                 img {
                     src: "{current_image.url}",
@@ -192,7 +182,6 @@ fn ImageViewer(
                 }
             }
 
-            // Next button
             button {
                 class: "absolute right-4 text-white text-5xl hover:text-blue-500 transition-colors",
                 onclick: move |_| on_next.call(()),
@@ -202,20 +191,14 @@ fn ImageViewer(
     }
 }
 
-
-
-
-// Server function to fetch images
 #[server]
 async fn fetch_images() -> Result<Vec<ImageInfo>, ServerFnError> {
     #[cfg(feature = "server")]
     {
         use std::fs;
-        use std::path::Path;
 
         let local_cache = "./public/gallery_cache";
 
-        // Create directory if it doesn't exist
         fs::create_dir_all(local_cache)
             .map_err(|e| ServerFnError::new(format!("Failed to create cache dir: {}", e)))?;
 
@@ -252,6 +235,3 @@ async fn fetch_images() -> Result<Vec<ImageInfo>, ServerFnError> {
         Ok(Vec::new())
     }
 }
-
-
-
