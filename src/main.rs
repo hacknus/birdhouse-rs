@@ -47,6 +47,10 @@ async fn main() {
     use dioxus::prelude::*;
     use std::net::SocketAddr;
     use tower_http::services::ServeDir;
+    use axum::{
+        routing::get,
+        response::Redirect,
+    };
 
     dotenv::dotenv().ok();
 
@@ -60,6 +64,7 @@ async fn main() {
     println!("Listening on http://{}", addr);
 
     let router = Router::new()
+        .route("/voegeli", get(|| async { Redirect::temporary("/") }))
         .serve_dioxus_application(ServeConfig::default(), App)
         .nest_service("/assets", ServeDir::new("public/assets"))
         .nest_service("/gallery_cache", ServeDir::new("public/gallery_cache"));
