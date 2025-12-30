@@ -9,8 +9,8 @@ RUN cargo chef prepare --recipe-path recipe.json
 FROM chef AS builder
 COPY --from=planner /app/recipe.json recipe.json
 
-# Cook only web dependencies (no server features)
-RUN cargo chef cook --release --no-default-features --features web --recipe-path recipe.json
+# Cook dependencies WITHOUT fullstack to avoid tokio/mio for WASM
+RUN cargo chef cook --release --no-default-features --recipe-path recipe.json
 
 COPY . .
 
@@ -19,7 +19,7 @@ RUN curl -L --proto '=https' --tlsv1.2 -sSf https://raw.githubusercontent.com/ca
 RUN cargo binstall dioxus-cli --root /.cargo -y --force
 ENV PATH="/.cargo/bin:$PATH"
 
-# dx bundle handles building both WASM (client) and server binary separately
+# Now build with full features - dx handles feature splitting properly
 RUN dx bundle --release --features server
 
 FROM debian:bookworm-slim AS runtime
@@ -30,11 +30,7 @@ RUN apt-get update && apt-get install -y \
 
 WORKDIR /usr/local/app
 
-# Copy the server binary and web assets
-COPY --from=builder /app/target/dx/birdhouse-rs/release/web/server ./server
-COPY --from=builder /app/target/dx/birdhouse-rs/release/web/public/ ./public/
-COPY --from=builder /app/assets/ ./assets/
-COPY --from=builder /app/public/ ./public/
+COPY --from=builder /app/target/dx/birdhouse-rs/release/web/ ./
 
 ENV PORT=8080
 ENV IP=0.0.0.0
