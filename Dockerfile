@@ -9,8 +9,8 @@ RUN cargo chef prepare --recipe-path recipe.json
 FROM chef AS builder
 COPY --from=planner /app/recipe.json recipe.json
 
-# Only cook dependencies without features to avoid WASM/server conflicts
-RUN cargo chef cook --release --recipe-path recipe.json
+# Cook only web dependencies (no server features)
+RUN cargo chef cook --release --no-default-features --features web --recipe-path recipe.json
 
 COPY . .
 
