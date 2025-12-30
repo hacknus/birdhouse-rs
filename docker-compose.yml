@@ -4,9 +4,6 @@ services:
     container_name: birdhouse-rs
     ports:
       - "8080:8080"
-    environment:
-      - WEBSOCKET_URL=ws://localhost:8000/ws
-      - STREAM_URL=http://localhost:8889/cam
     volumes:
       - ./public/gallery_cache:/app/public/gallery_cache
     restart: unless-stopped
