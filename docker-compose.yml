@@ -4,6 +4,8 @@ services:
     container_name: birdhouse-rs
     ports:
       - "8080:8080"
+    env_file:
+      - .env
     volumes:
       - ./public/gallery_cache:/app/public/gallery_cache
     restart: unless-stopped
