@@ -9,6 +9,10 @@ async fn get_stream_config() -> Result<StreamConfig, ServerFnError> {
             .unwrap_or_else(|_| "http://127.0.0.1:8889/cam".to_string()),
         websocket_url: std::env::var("WEBSOCKET_URL")
             .unwrap_or_else(|_| "ws://127.0.0.1:8000/ws".to_string()),
+        grafana_base_url: std::env::var("GRAFANA_BASE_URL")
+            .unwrap_or_else(|_| "http://localhost:3000".to_string()),
+        grafana_dashboard: std::env::var("GRAFANA_DASHBOARD")
+            .unwrap_or_else(|_| "ad9bp5g/voegeli".to_string()),
     })
 }
 
@@ -16,6 +20,8 @@ async fn get_stream_config() -> Result<StreamConfig, ServerFnError> {
 struct StreamConfig {
     stream_url: String,
     websocket_url: String,
+    grafana_base_url: String,
+    grafana_dashboard: String,
 }
 
 pub fn Home() -> Element {
@@ -178,13 +184,49 @@ pub fn Home() -> Element {
             class: "min-h-screen w-full flex flex-col items-center justify-center bg-slate-900 gap-4",
             iframe {
                 src: stream_url,
-                class: "w-full max-w-4xl rounded-lg bg-gray-800 h-96",
+                class: "w-full max-w-7xl rounded-lg bg-gray-800 h-96",
                 allow: "camera;autoplay",
             }
             canvas {
                 id: "spec",
-                class: "w-full max-w-4xl h-64 bg-black rounded-lg",
+                class: "w-full max-w-7xl h-64 bg-black rounded-lg",
             }
+
+            // Grafana panels grid
+        div {
+            class: "w-full max-w-7xl grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4",
+
+            // Temperature panel
+                // <iframe src="http://localhost:3000/d-solo/adv7pb5/voegeli?orgId=1&timezone=browser&refresh=5s&panelId=panel-7&__feature.dashboardSceneSolo=true" width="450" height="200" frameborder="0"></iframe>
+            iframe {
+                src: format!("{}/d-solo/{}?orgId=1&timezone=browser&refresh=5s&panelId=panel-7&__feature.dashboardSceneSolo=true&from=now-6h&to=now", cfg.grafana_base_url, cfg.grafana_dashboard),
+                class: "w-full h-64 rounded-lg border-2 border-slate-700",
+            }
+
+            // Humidity panel
+            iframe {
+                src: format!("{}/d-solo/{}?orgId=1&timezone=browser&refresh=5s&panelId=panel-8&__feature.dashboardSceneSolo=true&from=now-6h&to=now", cfg.grafana_base_url, cfg.grafana_dashboard),
+                class: "w-full h-64 rounded-lg border-2 border-slate-700",
+            }
+
+            // CO2 panel
+            iframe {
+                src: format!("{}/d-solo/{}?orgId=1&timezone=browser&refresh=5s&panelId=panel-9&__feature.dashboardSceneSolo=true&from=now-6h&to=now", cfg.grafana_base_url, cfg.grafana_dashboard),
+                class: "w-full h-64 rounded-lg border-2 border-slate-700",
+            }
+
+            // Motion panel
+            iframe {
+                src: format!("{}/d-solo/{}?orgId=1&timezone=browser&refresh=5s&panelId=panel-10&__feature.dashboardSceneSolo=true&from=now-6h&to=now", cfg.grafana_base_url, cfg.grafana_dashboard),
+                class: "w-full h-64 rounded-lg border-2 border-slate-700",
+            }
+
+            // Visitors panel
+            iframe {
+                src: format!("{}/d-solo/{}?orgId=1&timezone=browser&refresh=5s&panelId=panel-11&__feature.dashboardSceneSolo=true&from=now-6h&to=now", cfg.grafana_base_url, cfg.grafana_dashboard),
+                class: "w-full h-64 rounded-lg border-2 border-slate-700",
+            }
+        }
         }
     }
 }
