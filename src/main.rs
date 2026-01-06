@@ -7,6 +7,7 @@ mod views;
 
 #[cfg(feature = "server")]
 mod tcp_client;
+mod tcp_state;
 
 #[derive(Debug, Clone, Routable, PartialEq)]
 #[rustfmt::skip]
@@ -34,6 +35,13 @@ const TAILWIND_CSS: Asset = asset!("/assets/tailwind.css");
 
 #[component]
 fn App() -> Element {
+    let tcp_state = use_context_provider(|| tcp_state::TcpState::new());
+
+    #[cfg(target_arch = "wasm32")]
+    use_effect(move || {
+        tcp_state.init_websocket();
+    });
+
     rsx! {
         document::Link { rel: "icon", href: FAVICON }
         document::Link { rel: "stylesheet", href: MAIN_CSS }
@@ -42,6 +50,7 @@ fn App() -> Element {
         Router::<Route> {}
     }
 }
+
 
 #[cfg(feature = "server")]
 #[tokio::main]

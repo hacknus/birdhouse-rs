@@ -30,6 +30,7 @@ struct StreamConfig {
 
 #[cfg(feature = "server")]
 use crate::tcp_client;
+use crate::tcp_state;
 
 #[server]
 async fn toggle_ir_led(enabled: bool) -> Result<bool, ServerFnError> {
@@ -91,11 +92,12 @@ async fn get_admin_feature_state() -> Result<bool, ServerFnError> {
 pub fn Home() -> Element {
     let mut config = use_resource(|| async move { get_stream_config().await.ok() });
     let mut _ws_task = use_signal(|| None::<Task>);
-    let mut tcp_ws_task = use_signal(|| None::<Task>);
+    let tcp_ws_task = use_signal(|| None::<Task>);
 
-    let mut ir_enabled = use_signal(|| false);
-    let mut ir_filter_enabled = use_signal(|| false);
-    let mut is_admin_user = use_signal(|| false);
+    let mut tcp_state = use_context::<tcp_state::TcpState>();
+    let mut ir_enabled = tcp_state.ir_enabled;
+    let mut ir_filter_enabled = tcp_state.ir_filter_enabled;
+    let mut is_admin_user = tcp_state.is_admin;
 
     {
         let mut ir_enabled_signal = ir_enabled.clone();

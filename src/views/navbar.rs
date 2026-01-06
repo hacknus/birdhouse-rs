@@ -54,7 +54,7 @@ pub fn Navbar() -> Element {
                             dropdown_value.set(String::new());
                         }
                     },
-                    option { value: "", disabled: true, hidden: true, "Navigate" }
+                    option { value: "", disabled: true, hidden: true, "vögeli" }
                     option { value: "home", "Home" }
                     option { value: "gallery", "Gallery" }
                     option { value: "making", "Making of" }

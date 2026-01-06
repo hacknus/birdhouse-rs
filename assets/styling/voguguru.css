@@ -1,16 +1,22 @@
 /* Background overlay */
 .aarewasser {
     background-color: #2be6ff;
-    background-size: auto; /* Keeps original pattern size */
-    background-repeat: repeat; /* Repeat the pattern */
-    background-position: top left; /* Align pattern from the top left */
-    min-height: 100vh; /* Ensure it covers full height */
+    background-size: auto;
+    background-repeat: repeat;
+    background-position: top left;
+    min-height: 100vh;
+    display: flex;
+    align-items: center;
+    justify-content: center;
 }
-
 
 .container {
     color: #306FB2;
     font-size: 1.5rem;
+    font-family: 'DINNextLTPro-Condensed', sans-serif;
+    width: 100%;
+    max-width: 800px;
+    padding: 20px;
 }
 
 /* Wrapper ensures the number and degree symbol stay together */
@@ -55,4 +61,10 @@
 
 .text-center {
     text-align: center;
+}
+
+/* Apply font to all text elements */
+.container p,
+.container h3 {
+    font-family: 'DINNextLTPro-Condensed', sans-serif;
 }
