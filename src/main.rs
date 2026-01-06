@@ -99,7 +99,7 @@ async fn main() {
         std::env::var("TCP_SERVER_ADDR"),
         std::env::var("TCP_ENCRYPTION_KEY"),
     ) {
-        match tcp_client::connect(&tcp_addr, &tcp_key) {
+        match tcp_client::connect(&tcp_addr, &tcp_key.trim()) {
             Ok(_) => println!("Connected to TCP server: {}", tcp_addr),
             Err(e) => eprintln!("Failed to connect to TCP server: {}", e),
         }
