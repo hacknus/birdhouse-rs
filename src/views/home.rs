@@ -351,130 +351,134 @@ pub fn Home() -> Element {
     });
 
     rsx! {
-            section {
-                class: "min-h-screen w-full flex flex-col items-center justify-center bg-slate-900 gap-4",
+                section {
+                    class: "min-h-screen w-full flex flex-col items-center bg-slate-900 gap-6 py-4",
 
-                // Toggle switches container
-                div {
-                    class: "w-full max-w-7xl flex items-center gap-6 px-4",
-
-                    // IR LED Toggle
+                    // Toggle switches container
                     div {
-                        class: "flex items-center gap-3",
-                        label {
-                            class: "text-white font-medium",
-                            "IR LED"
-                        }
-                        button {
-                            class: format!(
-                                "relative inline-flex h-8 w-14 items-center rounded-full transition-colors {}",
-                                if ir_enabled() { "bg-blue-500" } else { "bg-gray-600" }
-                            ),
-                            onclick: move |_| {
-                                let new_state = !ir_enabled();
-                                spawn(async move {
-                                    if let Ok(state) = toggle_ir_led(new_state).await {
-                                        ir_enabled.set(state);
-                                    }
-                                });
-                            },
-                            span {
-                                class: format!(
-                                    "inline-block h-6 w-6 transform rounded-full bg-white transition-transform {}",
-                                    if ir_enabled() { "translate-x-7" } else { "translate-x-1" }
-                                )
+                        class: "w-full max-w-7xl flex flex-row flex-nowrap items-center justify-center gap-6 px-4 py-2 overflow-x-auto",
+                        div {
+                            class: "flex items-center gap-2",
+                            label {
+                                class: "text-white font-small whitespace-nowrap",
+                                "IR LED"
                             }
-                        }
-                    }
-
-                    // IR Filter Toggle (disabled unless admin)
-                    div {
-                        class: "flex items-center gap-3",
-                        label {
-                            class: format!(
-                                "font-medium {}",
-                                if is_admin_user() { "text-white" } else { "text-gray-500" }
-                            ),
-                            "IR Filter"
-                        }
-                        button {
-                            class: format!(
-                                "relative inline-flex h-8 w-14 items-center rounded-full transition-colors {} {}",
-                                if ir_filter_enabled() {
-                                    if is_admin_user() { "bg-blue-500" } else { "bg-gray-500" }
-                                } else {
-                                    "bg-gray-600"
-                                },
-                                if !is_admin_user() { "opacity-50 cursor-not-allowed" } else { "cursor-pointer" }
-                            ),
-                            disabled: !is_admin_user(),
-                            onclick: move |_| {
-                                if is_admin_user() {
-                                    let new_state = !ir_filter_enabled();
+                            button {
+                                class: format!(
+                                    "relative inline-flex h-6 w-12 items-center rounded-full transition-colors {}",
+                                    if ir_enabled() { "bg-blue-500" } else { "bg-gray-600" }
+                                ),
+                                onclick: move |_| {
+                                    let new_state = !ir_enabled();
                                     spawn(async move {
-                                        if let Ok(state) = toggle_ir_filter(new_state).await {
-                                            ir_filter_enabled.set(state);
+                                        if let Ok(state) = toggle_ir_led(new_state).await {
+                                            ir_enabled.set(state);
                                         }
                                     });
+                                },
+                                span {
+                                    class: format!(
+                                        "inline-block h-4 w-4 transform rounded-full bg-white transition-transform {}",
+                                        if ir_enabled() { "translate-x-7" } else { "translate-x-1" }
+                                    )
                                 }
-                            },
-                            span {
+                            }
+                        }
+
+                        div {
+                            class: "flex items-center gap-3",
+                            label {
                                 class: format!(
-                                    "inline-block h-6 w-6 transform rounded-full bg-white transition-transform {}",
-                                    if ir_filter_enabled() { "translate-x-7" } else { "translate-x-1" }
-                                )
+                                    "font-small whitespace-nowrap {}",
+                                    if is_admin_user() { "text-white" } else { "text-gray-500" }
+                                ),
+                                "IR Filter"
+                            }
+                            button {
+                                class: format!(
+                                    "relative inline-flex h-6 w-12 items-center rounded-full transition-colors {} {}",
+                                    if ir_filter_enabled() {
+                                        if is_admin_user() { "bg-blue-500" } else { "bg-gray-500" }
+                                    } else {
+                                        "bg-gray-600"
+                                    },
+                                    if !is_admin_user() { "opacity-50 cursor-not-allowed" } else { "cursor-pointer" }
+                                ),
+                                disabled: !is_admin_user(),
+                                onclick: move |_| {
+                                    if is_admin_user() {
+                                        let new_state = !ir_filter_enabled();
+                                        spawn(async move {
+                                            if let Ok(state) = toggle_ir_filter(new_state).await {
+                                                ir_filter_enabled.set(state);
+                                            }
+                                        });
+                                    }
+                                },
+                                span {
+                                    class: format!(
+                                        "inline-block h-4 w-4 transform rounded-full bg-white transition-transform {}",
+                                        if ir_filter_enabled() { "translate-x-7" } else { "translate-x-1" }
+                                    )
+                                }
                             }
                         }
                     }
-                }
 
-                iframe {
-                    src: stream_url,
-                    class: "w-full max-w-7xl rounded-lg bg-gray-800 h-96",
-                    allow: "camera;autoplay",
-                }
-                canvas {
-                    id: "spec",
-                    class: "w-full max-w-7xl h-64 bg-black rounded-lg",
-                }
+
+                    div {
+                        class: "w-full flex flex-col items-center gap-6 px-4",
+                        style: "--content-width: min(100%, 1280px); --stream-height: calc(var(--content-width) * 9 / 16); --spec-height: calc(var(--content-width) * 4 / 16);",
+                        iframe {
+                            src: stream_url,
+                            style: "height: var(--stream-height); aspect-ratio: 16 / 9; width: var(--content-width);",
+                            class: "rounded-lg bg-gray-800 shadow-lg",
+                            allow: "camera;autoplay",
+                        }
+                        canvas {
+                            id: "spec",
+                            style: "height: var(--spec-height); aspect-ratio: 16 / 4; width: var(--content-width);",
+                            class: "rounded-lg bg-black shadow-lg",
+                        }
+                    }
 
                 // Grafana panels grid
-            div {
-                class: "w-full max-w-7xl grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4",
+                div {
+                    class: "w-full max-w-7xl grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4",
 
-                // Temperature panel
-                    // <iframe src="http://localhost:3000/d-solo/adv7pb5/voegeli?orgId=1&timezone=browser&refresh=5s&panelId=panel-7&__feature.dashboardSceneSolo=true" width="450" height="200" frameborder="0"></iframe>
-                iframe {
-                    src: format!("{}/d-solo/{}?orgId=1&timezone=browser&refresh=5s&panelId=panel-7&__feature.dashboardSceneSolo=true&from=now-6h&to=now", cfg.grafana_base_url, cfg.grafana_dashboard),
-                    class: "w-full h-64 rounded-lg border-2 border-slate-700",
-                }
+                    // Temperature panel
+                        // <iframe src="http://localhost:3000/d-solo/adv7pb5/voegeli?orgId=1&timezone=browser&refresh=5s&panelId=panel-7&__feature.dashboardSceneSolo=true" width="450" height="200" frameborder="0"></iframe>
+                    iframe {
+                        src: format!("{}/d-solo/{}?orgId=1&timezone=browser&refresh=5s&panelId=panel-7&__feature.dashboardSceneSolo=true&from=now-6h&to=now", cfg.grafana_base_url, cfg.grafana_dashboard),
+                        class: "w-full h-64 rounded-lg border-2 border-slate-700",
+                    }
 
-                // Humidity panel
-                iframe {
-                    src: format!("{}/d-solo/{}?orgId=1&timezone=browser&refresh=5s&panelId=panel-8&__feature.dashboardSceneSolo=true&from=now-6h&to=now", cfg.grafana_base_url, cfg.grafana_dashboard),
-                    class: "w-full h-64 rounded-lg border-2 border-slate-700",
-                }
+                    // Humidity panel
+                    iframe {
+                        src: format!("{}/d-solo/{}?orgId=1&timezone=browser&refresh=5s&panelId=panel-8&__feature.dashboardSceneSolo=true&from=now-6h&to=now", cfg.grafana_base_url, cfg.grafana_dashboard),
+                        class: "w-full h-64 rounded-lg border-2 border-slate-700",
+                    }
 
-                // CO2 panel
-                iframe {
-                    src: format!("{}/d-solo/{}?orgId=1&timezone=browser&refresh=5s&panelId=panel-9&__feature.dashboardSceneSolo=true&from=now-6h&to=now", cfg.grafana_base_url, cfg.grafana_dashboard),
-                    class: "w-full h-64 rounded-lg border-2 border-slate-700",
-                }
+                    // CO2 panel
+                    iframe {
+                        src: format!("{}/d-solo/{}?orgId=1&timezone=browser&refresh=5s&panelId=panel-9&__feature.dashboardSceneSolo=true&from=now-6h&to=now", cfg.grafana_base_url, cfg.grafana_dashboard),
+                        class: "w-full h-64 rounded-lg border-2 border-slate-700",
+                    }
 
-                // Motion panel
-                iframe {
-                    src: format!("{}/d-solo/{}?orgId=1&timezone=browser&refresh=5s&panelId=panel-10&__feature.dashboardSceneSolo=true&from=now-6h&to=now", cfg.grafana_base_url, cfg.grafana_dashboard),
-                    class: "w-full h-64 rounded-lg border-2 border-slate-700",
-                }
+                    // Motion panel
+                    iframe {
+                        src: format!("{}/d-solo/{}?orgId=1&timezone=browser&refresh=5s&panelId=panel-10&__feature.dashboardSceneSolo=true&from=now-6h&to=now", cfg.grafana_base_url, cfg.grafana_dashboard),
+                        class: "w-full h-64 rounded-lg border-2 border-slate-700",
+                    }
 
-                // Visitors panel
-                iframe {
-                    src: format!("{}/d-solo/{}?orgId=1&timezone=browser&refresh=5s&panelId=panel-11&__feature.dashboardSceneSolo=true&from=now-6h&to=now", cfg.grafana_base_url, cfg.grafana_dashboard),
-                    class: "w-full h-64 rounded-lg border-2 border-slate-700",
+                    // Visitors panel
+                    iframe {
+                        src: format!("{}/d-solo/{}?orgId=1&timezone=browser&refresh=5s&panelId=panel-11&__feature.dashboardSceneSolo=true&from=now-6h&to=now", cfg.grafana_base_url, cfg.grafana_dashboard),
+                        class: "w-full h-64 rounded-lg border-2 border-slate-700",
+                    }
                 }
-            }
-            }
-    }
+                }
+        }
 }
 
 #[derive(Clone, serde::Serialize, serde::Deserialize, Debug)]
