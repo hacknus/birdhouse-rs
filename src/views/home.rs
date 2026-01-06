@@ -1,6 +1,10 @@
 use dioxus::dioxus_core::Task;
 use dioxus::document::eval;
 use dioxus::prelude::*;
+#[cfg(target_arch = "wasm32")]
+use wasm_bindgen::{closure::Closure, JsCast};
+#[cfg(target_arch = "wasm32")]
+use web_sys::{MessageEvent, WebSocket};
 
 #[server]
 async fn get_stream_config() -> Result<StreamConfig, ServerFnError> {
@@ -24,9 +28,108 @@ struct StreamConfig {
     grafana_dashboard: String,
 }
 
+#[cfg(feature = "server")]
+use crate::tcp_client;
+
+#[server]
+async fn toggle_ir_led(enabled: bool) -> Result<bool, ServerFnError> {
+    let cmd = if enabled {
+        "[CMD] IR ON"
+    } else {
+        "[CMD] IR OFF"
+    };
+
+    match tcp_client::send_command(cmd) {
+        Ok(_) => Ok(enabled),
+        Err(e) => Err(ServerFnError::new(e)),
+    }
+}
+
+#[server]
+async fn get_ir_state() -> Result<bool, ServerFnError> {
+    match tcp_client::send_command("[CMD] GET IR STATE") {
+        Ok(response) => {
+            let is_on = response.to_lowercase().contains("on") || response.contains("1");
+            Ok(is_on)
+        }
+        Err(e) => Err(ServerFnError::new(e)),
+    }
+}
+
+#[server]
+async fn is_admin() -> Result<bool, ServerFnError> {
+    // TODO: Implement actual admin check (e.g., check session, JWT token, etc.)
+    // For now, return false
+    Ok(false)
+}
+
+#[server]
+async fn toggle_ir_filter(enabled: bool) -> Result<bool, ServerFnError> {
+    let cmd = if enabled {
+        "[CMD] IR FILTER ON"
+    } else {
+        "[CMD] IR FILTER OFF"
+    };
+
+    match tcp_client::send_command(cmd) {
+        Ok(_) => Ok(enabled),
+        Err(e) => Err(ServerFnError::new(e)),
+    }
+}
+
+#[server]
+async fn get_admin_feature_state() -> Result<bool, ServerFnError> {
+    match tcp_client::send_command("[CMD] GET IR FILTER STATE") {
+        Ok(response) => {
+            let is_on = response.to_lowercase().contains("on") || response.contains("1");
+            Ok(is_on)
+        }
+        Err(e) => Err(ServerFnError::new(e)),
+    }
+}
+
 pub fn Home() -> Element {
     let mut config = use_resource(|| async move { get_stream_config().await.ok() });
     let mut _ws_task = use_signal(|| None::<Task>);
+    let mut tcp_ws_task = use_signal(|| None::<Task>);
+
+    let mut ir_enabled = use_signal(|| false);
+    let mut ir_filter_enabled = use_signal(|| false);
+    let mut is_admin_user = use_signal(|| false);
+
+    {
+        let mut ir_enabled_signal = ir_enabled.clone();
+        use_resource(move || async move {
+            if let Ok(state) = get_ir_state().await {
+                ir_enabled_signal.set(state);
+            }
+        });
+    }
+
+    {
+        let mut ir_filter_signal = ir_filter_enabled.clone();
+        use_resource(move || async move {
+            if let Ok(state) = get_admin_feature_state().await {
+                ir_filter_signal.set(state);
+            }
+        });
+    }
+
+    {
+        let mut admin_signal = is_admin_user.clone();
+        use_resource(move || async move {
+            if let Ok(admin) = is_admin().await {
+                admin_signal.set(admin);
+            }
+        });
+    }
+
+    // Check admin status on mount
+    use_resource(move || async move {
+        if let Ok(admin) = is_admin().await {
+            is_admin_user.set(admin);
+        }
+    });
 
     let config_value = config.read();
     let Some(Some(cfg)) = config_value.as_ref() else {
@@ -36,10 +139,77 @@ pub fn Home() -> Element {
     let stream_url = cfg.stream_url.clone();
     let ws_url = cfg.websocket_url.clone();
 
+    #[cfg(target_arch = "wasm32")]
+    let tcp_ws_handle = use_signal(|| None::<WebSocket>);
+
+    #[cfg(target_arch = "wasm32")]
+    {
+        let mut ws_store = tcp_ws_handle.clone();
+        let mut ir_enabled_signal = ir_enabled.clone();
+        let mut ir_filter_signal = ir_filter_enabled.clone();
+
+        use_effect(move || {
+            if ws_store.read().is_some() {
+                return;
+            }
+
+            let window = web_sys::window().expect("browser window");
+            let host = window
+                .location()
+                .host()
+                .unwrap_or_else(|_| "127.0.0.1:8080".into());
+            let socket =
+                WebSocket::new(&format!("ws://{host}/ws/tcp")).expect("open TCP websocket");
+
+            let on_message = {
+                let mut ir_enabled_signal = ir_enabled_signal.clone();
+                let mut ir_filter_signal = ir_filter_signal.clone();
+                Closure::wrap(Box::new(move |event: MessageEvent| {
+                    if let Some(text) = event.data().as_string() {
+                        let payload = text.to_uppercase();
+                        match () {
+                            _ if payload.contains("IR LED STATE: ON")
+                                || payload.contains("IR STATE IS ON")
+                                || payload.contains("IR ON") =>
+                            {
+                                ir_enabled_signal.set(true);
+                            }
+                            _ if payload.contains("IR LED STATE: OFF")
+                                || payload.contains("IR STATE IS OFF")
+                                || payload.contains("IR OFF") =>
+                            {
+                                ir_enabled_signal.set(false);
+                            }
+                            _ if payload.contains("IR FILTER STATE: ON")
+                                || payload.contains("IR FILTER STATE IS ON")
+                                || payload.contains("IR FILTER ON") =>
+                            {
+                                ir_filter_signal.set(true);
+                            }
+                            _ if payload.contains("IR FILTER STATE: OFF")
+                                || payload.contains("IR FILTER STATE IS OFF")
+                                || payload.contains("IR FILTER OFF") =>
+                            {
+                                ir_filter_signal.set(false);
+                            }
+                            _ => {}
+                        }
+                    }
+                }) as Box<dyn FnMut(_)>)
+            };
+
+            socket.set_onmessage(Some(on_message.as_ref().unchecked_ref()));
+            on_message.forget();
+
+            ws_store.set(Some(socket));
+        });
+    }
+
     use_effect(move || {
         let ws_url = ws_url.clone();
         let task = spawn(async move {
-            let script = format!(r#"
+            let script = format!(
+                r#"
                 const canvas = document.getElementById("spec");
                 const gl = canvas.getContext("webgl", {{
                     alpha: false,
@@ -172,7 +342,8 @@ pub fn Home() -> Element {
                 gl.clear(gl.COLOR_BUFFER_BIT);
                 gl.uniform1f(offsetLoc, 0);
                 gl.drawArrays(gl.TRIANGLE_STRIP, 0, 4);
-            "#);
+            "#
+            );
 
             eval(&script);
         });
@@ -180,53 +351,135 @@ pub fn Home() -> Element {
     });
 
     rsx! {
-        section {
-            class: "min-h-screen w-full flex flex-col items-center justify-center bg-slate-900 gap-4",
-            iframe {
-                src: stream_url,
-                class: "w-full max-w-7xl rounded-lg bg-gray-800 h-96",
-                allow: "camera;autoplay",
-            }
-            canvas {
-                id: "spec",
-                class: "w-full max-w-7xl h-64 bg-black rounded-lg",
-            }
+            section {
+                class: "min-h-screen w-full flex flex-col items-center justify-center bg-slate-900 gap-4",
 
-            // Grafana panels grid
-        div {
-            class: "w-full max-w-7xl grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4",
+                // Toggle switches container
+                div {
+                    class: "w-full max-w-7xl flex items-center gap-6 px-4",
 
-            // Temperature panel
-                // <iframe src="http://localhost:3000/d-solo/adv7pb5/voegeli?orgId=1&timezone=browser&refresh=5s&panelId=panel-7&__feature.dashboardSceneSolo=true" width="450" height="200" frameborder="0"></iframe>
-            iframe {
-                src: format!("{}/d-solo/{}?orgId=1&timezone=browser&refresh=5s&panelId=panel-7&__feature.dashboardSceneSolo=true&from=now-6h&to=now", cfg.grafana_base_url, cfg.grafana_dashboard),
-                class: "w-full h-64 rounded-lg border-2 border-slate-700",
-            }
+                    // IR LED Toggle
+                    div {
+                        class: "flex items-center gap-3",
+                        label {
+                            class: "text-white font-medium",
+                            "IR LED"
+                        }
+                        button {
+                            class: format!(
+                                "relative inline-flex h-8 w-14 items-center rounded-full transition-colors {}",
+                                if ir_enabled() { "bg-blue-500" } else { "bg-gray-600" }
+                            ),
+                            onclick: move |_| {
+                                let new_state = !ir_enabled();
+                                spawn(async move {
+                                    if let Ok(state) = toggle_ir_led(new_state).await {
+                                        ir_enabled.set(state);
+                                    }
+                                });
+                            },
+                            span {
+                                class: format!(
+                                    "inline-block h-6 w-6 transform rounded-full bg-white transition-transform {}",
+                                    if ir_enabled() { "translate-x-7" } else { "translate-x-1" }
+                                )
+                            }
+                        }
+                    }
 
-            // Humidity panel
-            iframe {
-                src: format!("{}/d-solo/{}?orgId=1&timezone=browser&refresh=5s&panelId=panel-8&__feature.dashboardSceneSolo=true&from=now-6h&to=now", cfg.grafana_base_url, cfg.grafana_dashboard),
-                class: "w-full h-64 rounded-lg border-2 border-slate-700",
-            }
+                    // IR Filter Toggle (disabled unless admin)
+                    div {
+                        class: "flex items-center gap-3",
+                        label {
+                            class: format!(
+                                "font-medium {}",
+                                if is_admin_user() { "text-white" } else { "text-gray-500" }
+                            ),
+                            "IR Filter"
+                        }
+                        button {
+                            class: format!(
+                                "relative inline-flex h-8 w-14 items-center rounded-full transition-colors {} {}",
+                                if ir_filter_enabled() {
+                                    if is_admin_user() { "bg-blue-500" } else { "bg-gray-500" }
+                                } else {
+                                    "bg-gray-600"
+                                },
+                                if !is_admin_user() { "opacity-50 cursor-not-allowed" } else { "cursor-pointer" }
+                            ),
+                            disabled: !is_admin_user(),
+                            onclick: move |_| {
+                                if is_admin_user() {
+                                    let new_state = !ir_filter_enabled();
+                                    spawn(async move {
+                                        if let Ok(state) = toggle_ir_filter(new_state).await {
+                                            ir_filter_enabled.set(state);
+                                        }
+                                    });
+                                }
+                            },
+                            span {
+                                class: format!(
+                                    "inline-block h-6 w-6 transform rounded-full bg-white transition-transform {}",
+                                    if ir_filter_enabled() { "translate-x-7" } else { "translate-x-1" }
+                                )
+                            }
+                        }
+                    }
+                }
 
-            // CO2 panel
-            iframe {
-                src: format!("{}/d-solo/{}?orgId=1&timezone=browser&refresh=5s&panelId=panel-9&__feature.dashboardSceneSolo=true&from=now-6h&to=now", cfg.grafana_base_url, cfg.grafana_dashboard),
-                class: "w-full h-64 rounded-lg border-2 border-slate-700",
-            }
+                iframe {
+                    src: stream_url,
+                    class: "w-full max-w-7xl rounded-lg bg-gray-800 h-96",
+                    allow: "camera;autoplay",
+                }
+                canvas {
+                    id: "spec",
+                    class: "w-full max-w-7xl h-64 bg-black rounded-lg",
+                }
 
-            // Motion panel
-            iframe {
-                src: format!("{}/d-solo/{}?orgId=1&timezone=browser&refresh=5s&panelId=panel-10&__feature.dashboardSceneSolo=true&from=now-6h&to=now", cfg.grafana_base_url, cfg.grafana_dashboard),
-                class: "w-full h-64 rounded-lg border-2 border-slate-700",
-            }
+                // Grafana panels grid
+            div {
+                class: "w-full max-w-7xl grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4",
 
-            // Visitors panel
-            iframe {
-                src: format!("{}/d-solo/{}?orgId=1&timezone=browser&refresh=5s&panelId=panel-11&__feature.dashboardSceneSolo=true&from=now-6h&to=now", cfg.grafana_base_url, cfg.grafana_dashboard),
-                class: "w-full h-64 rounded-lg border-2 border-slate-700",
+                // Temperature panel
+                    // <iframe src="http://localhost:3000/d-solo/adv7pb5/voegeli?orgId=1&timezone=browser&refresh=5s&panelId=panel-7&__feature.dashboardSceneSolo=true" width="450" height="200" frameborder="0"></iframe>
+                iframe {
+                    src: format!("{}/d-solo/{}?orgId=1&timezone=browser&refresh=5s&panelId=panel-7&__feature.dashboardSceneSolo=true&from=now-6h&to=now", cfg.grafana_base_url, cfg.grafana_dashboard),
+                    class: "w-full h-64 rounded-lg border-2 border-slate-700",
+                }
+
+                // Humidity panel
+                iframe {
+                    src: format!("{}/d-solo/{}?orgId=1&timezone=browser&refresh=5s&panelId=panel-8&__feature.dashboardSceneSolo=true&from=now-6h&to=now", cfg.grafana_base_url, cfg.grafana_dashboard),
+                    class: "w-full h-64 rounded-lg border-2 border-slate-700",
+                }
+
+                // CO2 panel
+                iframe {
+                    src: format!("{}/d-solo/{}?orgId=1&timezone=browser&refresh=5s&panelId=panel-9&__feature.dashboardSceneSolo=true&from=now-6h&to=now", cfg.grafana_base_url, cfg.grafana_dashboard),
+                    class: "w-full h-64 rounded-lg border-2 border-slate-700",
+                }
+
+                // Motion panel
+                iframe {
+                    src: format!("{}/d-solo/{}?orgId=1&timezone=browser&refresh=5s&panelId=panel-10&__feature.dashboardSceneSolo=true&from=now-6h&to=now", cfg.grafana_base_url, cfg.grafana_dashboard),
+                    class: "w-full h-64 rounded-lg border-2 border-slate-700",
+                }
+
+                // Visitors panel
+                iframe {
+                    src: format!("{}/d-solo/{}?orgId=1&timezone=browser&refresh=5s&panelId=panel-11&__feature.dashboardSceneSolo=true&from=now-6h&to=now", cfg.grafana_base_url, cfg.grafana_dashboard),
+                    class: "w-full h-64 rounded-lg border-2 border-slate-700",
+                }
             }
-        }
-        }
+            }
     }
+}
+
+#[derive(Clone, serde::Serialize, serde::Deserialize, Debug)]
+struct StateUpdate {
+    #[serde(rename = "type")]
+    update_type: String,
+    enabled: bool,
 }

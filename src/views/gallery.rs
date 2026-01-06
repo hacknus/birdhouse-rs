@@ -103,13 +103,11 @@ fn ImageViewer(
 
     let current_image = &images[idx];
 
-    let handle_keydown = move |evt: KeyboardEvent| {
-        match evt.key().to_string().as_str() {
-            "Escape" => on_close.call(()),
-            "ArrowLeft" => on_prev.call(()),
-            "ArrowRight" => on_next.call(()),
-            _ => {}
-        }
+    let handle_keydown = move |evt: KeyboardEvent| match evt.key().to_string().as_str() {
+        "Escape" => on_close.call(()),
+        "ArrowLeft" => on_prev.call(()),
+        "ArrowRight" => on_next.call(()),
+        _ => {}
     };
 
     let mut saved_scroll_y = use_signal(|| 0.0);
@@ -182,7 +180,8 @@ async fn fetch_images() -> Result<Vec<ImageInfo>, ServerFnError> {
         let mut images = Vec::new();
 
         for entry in entries {
-            let entry = entry.map_err(|e| ServerFnError::new(format!("Failed to read entry: {}", e)))?;
+            let entry =
+                entry.map_err(|e| ServerFnError::new(format!("Failed to read entry: {}", e)))?;
             let path = entry.path();
 
             if let Some(ext) = path.extension() {

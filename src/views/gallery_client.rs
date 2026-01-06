@@ -26,7 +26,10 @@ pub fn lock_scroll(scroll_y: f64) {
             }
 
             if let Some(body) = document.body() {
-                let style = format!("overflow: hidden; position: fixed; width: 100%; top: -{}px;", scroll_y);
+                let style = format!(
+                    "overflow: hidden; position: fixed; width: 100%; top: -{}px;",
+                    scroll_y
+                );
                 let _ = body.set_attribute("style", &style);
             }
         }

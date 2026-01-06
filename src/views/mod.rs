@@ -23,7 +23,7 @@ pub use voguguru::VoguGuru;
 mod gallery;
 pub use gallery::Gallery;
 
-mod makingof;
 pub mod gallery_client;
+mod makingof;
 
 pub use makingof::MakingOf;

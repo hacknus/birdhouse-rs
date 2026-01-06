@@ -1,0 +1,10 @@
+[package]
+name = "encryption"
+version = "0.1.0"
+edition = "2021"
+
+[dependencies]
+getrandom = "0.3.1"
+aes = "0.7.5"# needs to be at 0.7.5 because of breaking changes
+block-modes = "0.8.1"# needs to be at 0.8.1 because of breaking changes
+base64 = "0.22.1"

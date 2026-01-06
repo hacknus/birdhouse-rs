@@ -1,9 +1,12 @@
 use dioxus::prelude::*;
-use views::{Blog, Gallery, MakingOf, VoguGuru, Home, Navbar};
+use views::{Blog, Gallery, Home, MakingOf, Navbar, VoguGuru};
 
+mod api;
 mod components;
 mod views;
-mod api;
+
+#[cfg(feature = "server")]
+mod tcp_client;
 
 #[derive(Debug, Clone, Routable, PartialEq)]
 #[rustfmt::skip]
@@ -44,15 +47,63 @@ fn App() -> Element {
 #[tokio::main]
 async fn main() {
     use axum::Router;
-    use dioxus::prelude::*;
-    use std::net::SocketAddr;
-    use tower_http::services::ServeDir;
     use axum::{
-        routing::get,
+        extract::ws::{WebSocket, WebSocketUpgrade},
+        response::IntoResponse,
         response::Redirect,
+        routing::get,
     };
+    use dioxus::prelude::*;
+    use once_cell::sync::Lazy;
+    use std::net::SocketAddr;
+    use std::sync::Arc;
+    use tokio::sync::broadcast;
+    use tower_http::services::ServeDir;
+
+    static TCP_BROADCAST: Lazy<broadcast::Sender<String>> = Lazy::new(|| {
+        let (tx, _) = broadcast::channel(100);
+        tx
+    });
+
+    async fn tcp_websocket_handler(ws: WebSocketUpgrade) -> impl IntoResponse {
+        ws.on_upgrade(handle_tcp_socket)
+    }
+
+    async fn handle_tcp_socket(mut socket: WebSocket) {
+        let mut rx = TCP_BROADCAST.subscribe();
+
+        while let Ok(message) = rx.recv().await {
+            if socket
+                .send(axum::extract::ws::Message::Text(message.into()))
+                .await
+                .is_err()
+            {
+                break;
+            }
+        }
+    }
 
     dotenv::dotenv().ok();
+
+    // Initialize TCP connection with encryption key
+    if let (Ok(tcp_addr), Ok(tcp_key)) = (
+        std::env::var("TCP_SERVER_ADDR"),
+        std::env::var("TCP_ENCRYPTION_KEY"),
+    ) {
+        match tcp_client::connect(&tcp_addr, &tcp_key) {
+            Ok(_) => println!("Connected to TCP server: {}", tcp_addr),
+            Err(e) => eprintln!("Failed to connect to TCP server: {}", e),
+        }
+    } else {
+        eprintln!("TCP_SERVER_ADDR or TCP_ENCRYPTION_KEY not set in environment");
+    }
+
+    tokio::spawn(async {
+        let mut rx = tcp_client::subscribe_to_tcp_messages();
+        while let Ok(message) = rx.recv().await {
+            let _ = TCP_BROADCAST.send(message);
+        }
+    });
 
     let port = std::env::var("PORT")
         .ok()
@@ -65,6 +116,7 @@ async fn main() {
 
     let router = Router::new()
         .route("/voegeli", get(|| async { Redirect::temporary("/") }))
+        .route("/ws/tcp", get(tcp_websocket_handler)) // New endpoint
         .serve_dioxus_application(ServeConfig::default(), App)
         .nest_service("/assets", ServeDir::new("public/assets"))
         .nest_service("/gallery_cache", ServeDir::new("public/gallery_cache"));
@@ -74,7 +126,6 @@ async fn main() {
         .await
         .unwrap();
 }
-
 
 #[cfg(not(feature = "server"))]
 fn main() {

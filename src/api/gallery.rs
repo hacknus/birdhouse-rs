@@ -46,7 +46,10 @@ pub async fn upload_image(
         .and_then(|s| s.to_str())
         .unwrap_or("");
 
-    if !matches!(extension.to_lowercase().as_str(), "jpg" | "jpeg" | "png" | "gif" | "webp") {
+    if !matches!(
+        extension.to_lowercase().as_str(),
+        "jpg" | "jpeg" | "png" | "gif" | "webp"
+    ) {
         return Err(ServerFnError::new("Invalid file type"));
     }
 
