@@ -2,16 +2,9 @@ services:
   birdhouse:
     build: .
     container_name: birdhouse-rs
-    ports:
-      - "8080:8080"
+    network_mode: host
     env_file:
       - .env
     volumes:
       - ./public/gallery_cache:/app/public/gallery_cache
     restart: unless-stopped
-    networks:
-      - birdhouse-net
-
-networks:
-  birdhouse-net:
-    driver: bridge
