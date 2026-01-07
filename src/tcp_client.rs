@@ -44,8 +44,14 @@ pub fn connect(addr: &str, key: &str) -> Result<(), String> {
         .ip()
         .to_string();
 
+    println!("key: '{:?}'", key);
+    println!("Local IP: '{}'", local_ip);
+    println!("Socket Addrs: '{:?}'", socket_addrs);
+
     let mut auth_message = cipher.encrypt_message(&local_ip);
     auth_message.push('\n'); // Use \n for authentication (matches original tcp.rs)
+
+    println!("Auth msg: '{:?}'", auth_message);
 
     stream
         .write_all(auth_message.as_bytes())
