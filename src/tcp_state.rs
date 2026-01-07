@@ -10,7 +10,6 @@ pub struct TcpState {
     pub ir_filter_enabled: Signal<bool>,
     pub is_admin: Signal<bool>,
     pub ws_initialized: Signal<Option<()>>,
-
 }
 
 impl TcpState {
@@ -36,11 +35,18 @@ impl TcpState {
         }
 
         let window = web_sys::window().expect("browser window");
+        let protocol = window
+            .location()
+            .protocol()
+            .unwrap_or_else(|_| "http:".into());
         let host = window
             .location()
             .host()
             .unwrap_or_else(|_| "127.0.0.1:8080".into());
-        let socket = WebSocket::new(&format!("ws://{host}/ws/tcp")).expect("open TCP websocket");
+
+        let ws_protocol = if protocol == "https:" { "wss" } else { "ws" };
+        let socket = WebSocket::new(&format!("{}://{}/ws/tcp", ws_protocol, host))
+            .expect("open TCP websocket");
 
         let mut ir_enabled = self.ir_enabled;
         let mut ir_filter = self.ir_filter_enabled;
@@ -52,27 +58,27 @@ impl TcpState {
                     _ if payload.contains("IR LED STATE: ON")
                         || payload.contains("IR STATE IS ON")
                         || payload.contains("IR ON") =>
-                        {
-                            ir_enabled.set(true);
-                        }
+                    {
+                        ir_enabled.set(true);
+                    }
                     _ if payload.contains("IR LED STATE: OFF")
                         || payload.contains("IR STATE IS OFF")
                         || payload.contains("IR OFF") =>
-                        {
-                            ir_enabled.set(false);
-                        }
+                    {
+                        ir_enabled.set(false);
+                    }
                     _ if payload.contains("IR FILTER STATE: ON")
                         || payload.contains("IR FILTER STATE IS ON")
                         || payload.contains("IR FILTER ON") =>
-                        {
-                            ir_filter.set(true);
-                        }
+                    {
+                        ir_filter.set(true);
+                    }
                     _ if payload.contains("IR FILTER STATE: OFF")
                         || payload.contains("IR FILTER STATE IS OFF")
                         || payload.contains("IR FILTER OFF") =>
-                        {
-                            ir_filter.set(false);
-                        }
+                    {
+                        ir_filter.set(false);
+                    }
                     _ => {}
                 }
             }

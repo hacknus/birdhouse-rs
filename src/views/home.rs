@@ -53,7 +53,8 @@ async fn get_ir_state() -> Result<bool, ServerFnError> {
 
     let result = timeout(Duration::from_secs(2), async {
         tcp_client::send_command("[CMD] GET IR STATE")
-    }).await;
+    })
+    .await;
 
     match result {
         Ok(Ok(response)) => {
@@ -92,7 +93,8 @@ async fn get_admin_feature_state() -> Result<bool, ServerFnError> {
 
     let result = timeout(Duration::from_secs(2), async {
         tcp_client::send_command("[CMD] GET IR FILTER STATE")
-    }).await;
+    })
+    .await;
 
     match result {
         Ok(Ok(response)) => {
@@ -103,7 +105,6 @@ async fn get_admin_feature_state() -> Result<bool, ServerFnError> {
         Err(_) => Err(ServerFnError::new("TCP request timeout")),
     }
 }
-
 
 pub fn Home() -> Element {
     let mut config = use_resource(|| async move { get_stream_config().await.ok() });
@@ -119,17 +120,12 @@ pub fn Home() -> Element {
     let mut initial_states_loaded = use_signal(|| false);
 
     // Load initial states from server
-    let ir_state_resource = use_resource(move || async move {
-        get_ir_state().await.ok()
-    });
+    let ir_state_resource = use_resource(move || async move { get_ir_state().await.ok() });
 
-    let ir_filter_resource = use_resource(move || async move {
-        get_admin_feature_state().await.ok()
-    });
+    let ir_filter_resource =
+        use_resource(move || async move { get_admin_feature_state().await.ok() });
 
-    let admin_resource = use_resource(move || async move {
-        is_admin().await.ok()
-    });
+    let admin_resource = use_resource(move || async move { is_admin().await.ok() });
 
     // Update signals when all resources are ready
     use_effect(move || {
@@ -195,13 +191,20 @@ pub fn Home() -> Element {
             }
 
             let window = web_sys::window().expect("browser window");
+            let protocol = window
+                .location()
+                .protocol()
+                .unwrap_or_else(|_| "http:".into());
             let host = window
                 .location()
                 .host()
                 .unwrap_or_else(|_| "127.0.0.1:8080".into());
 
-            let ws_url = format!("ws://{host}/ws/tcp");
-            web_sys::console::log_1(&format!("Connecting to WebSocket: {}", ws_url).into());
+            // Use wss:// if the page is served over https://
+            let ws_protocol = if protocol == "https:" { "wss" } else { "ws" };
+            let ws_url = format!("{}://{}/ws/tcp", ws_protocol, host);
+
+            web_sys::console::log_1(&format!("Connecting to: {}", ws_url).into());
 
             let socket = WebSocket::new(&ws_url).expect("open TCP websocket");
 
@@ -260,7 +263,6 @@ pub fn Home() -> Element {
             ws_store.set(Some(socket));
         });
     }
-
 
     use_effect(move || {
         let ws_url = ws_url.clone();
@@ -408,132 +410,132 @@ pub fn Home() -> Element {
     });
 
     rsx! {
-                section {
-                    class: "min-h-screen w-full flex flex-col items-center bg-slate-900 gap-6 py-4",
+            section {
+                class: "min-h-screen w-full flex flex-col items-center bg-slate-900 gap-6 py-4",
 
-                    // Toggle switches container
+                // Toggle switches container
+                div {
+                    class: "w-full max-w-7xl flex flex-row flex-nowrap items-center justify-center gap-6 px-4 py-2 overflow-x-auto",
                     div {
-                        class: "w-full max-w-7xl flex flex-row flex-nowrap items-center justify-center gap-6 px-4 py-2 overflow-x-auto",
-                        div {
-                            class: "flex items-center gap-2",
-                            label {
-                                class: "text-white font-small whitespace-nowrap",
-                                "IR LED"
-                            }
-                            button {
+                        class: "flex items-center gap-2",
+                        label {
+                            class: "text-white font-small whitespace-nowrap",
+                            "IR LED"
+                        }
+                        button {
+                            class: format!(
+                                "relative inline-flex h-6 w-12 items-center rounded-full transition-colors {}",
+                                if ir_enabled() { "bg-blue-500" } else { "bg-gray-600" }
+                            ),
+                            onclick: move |_| {
+                                let new_state = !ir_enabled();
+                                spawn(async move {
+                                    if let Ok(state) = toggle_ir_led(new_state).await {
+                                        ir_enabled.set(state);
+                                    }
+                                });
+                            },
+                            span {
                                 class: format!(
-                                    "relative inline-flex h-6 w-12 items-center rounded-full transition-colors {}",
-                                    if ir_enabled() { "bg-blue-500" } else { "bg-gray-600" }
-                                ),
-                                onclick: move |_| {
-                                    let new_state = !ir_enabled();
+                                    "inline-block h-4 w-4 transform rounded-full bg-white transition-transform {}",
+                                    if ir_enabled() { "translate-x-7" } else { "translate-x-1" }
+                                )
+                            }
+                        }
+                    }
+
+                    div {
+                        class: "flex items-center gap-3",
+                        label {
+                            class: format!(
+                                "font-small whitespace-nowrap {}",
+                                if is_admin_user() { "text-white" } else { "text-gray-500" }
+                            ),
+                            "IR Filter"
+                        }
+                        button {
+                            class: format!(
+                                "relative inline-flex h-6 w-12 items-center rounded-full transition-colors {} {}",
+                                if ir_filter_enabled() {
+                                    if is_admin_user() { "bg-blue-500" } else { "bg-gray-500" }
+                                } else {
+                                    "bg-gray-600"
+                                },
+                                if !is_admin_user() { "opacity-50 cursor-not-allowed" } else { "cursor-pointer" }
+                            ),
+                            disabled: !is_admin_user(),
+                            onclick: move |_| {
+                                if is_admin_user() {
+                                    let new_state = !ir_filter_enabled();
                                     spawn(async move {
-                                        if let Ok(state) = toggle_ir_led(new_state).await {
-                                            ir_enabled.set(state);
+                                        if let Ok(state) = toggle_ir_filter(new_state).await {
+                                            ir_filter_enabled.set(state);
                                         }
                                     });
-                                },
-                                span {
-                                    class: format!(
-                                        "inline-block h-4 w-4 transform rounded-full bg-white transition-transform {}",
-                                        if ir_enabled() { "translate-x-7" } else { "translate-x-1" }
-                                    )
                                 }
-                            }
-                        }
-
-                        div {
-                            class: "flex items-center gap-3",
-                            label {
+                            },
+                            span {
                                 class: format!(
-                                    "font-small whitespace-nowrap {}",
-                                    if is_admin_user() { "text-white" } else { "text-gray-500" }
-                                ),
-                                "IR Filter"
-                            }
-                            button {
-                                class: format!(
-                                    "relative inline-flex h-6 w-12 items-center rounded-full transition-colors {} {}",
-                                    if ir_filter_enabled() {
-                                        if is_admin_user() { "bg-blue-500" } else { "bg-gray-500" }
-                                    } else {
-                                        "bg-gray-600"
-                                    },
-                                    if !is_admin_user() { "opacity-50 cursor-not-allowed" } else { "cursor-pointer" }
-                                ),
-                                disabled: !is_admin_user(),
-                                onclick: move |_| {
-                                    if is_admin_user() {
-                                        let new_state = !ir_filter_enabled();
-                                        spawn(async move {
-                                            if let Ok(state) = toggle_ir_filter(new_state).await {
-                                                ir_filter_enabled.set(state);
-                                            }
-                                        });
-                                    }
-                                },
-                                span {
-                                    class: format!(
-                                        "inline-block h-4 w-4 transform rounded-full bg-white transition-transform {}",
-                                        if ir_filter_enabled() { "translate-x-7" } else { "translate-x-1" }
-                                    )
-                                }
+                                    "inline-block h-4 w-4 transform rounded-full bg-white transition-transform {}",
+                                    if ir_filter_enabled() { "translate-x-7" } else { "translate-x-1" }
+                                )
                             }
                         }
                     }
+                }
 
 
-                    div {
-                        class: "w-full flex flex-col items-center gap-6 px-4",
-                        style: "--content-width: min(100%, 1280px); --stream-height: calc(var(--content-width) * 9 / 16); --spec-height: calc(var(--content-width) * 4 / 16);",
-                        iframe {
-                            src: stream_url,
-                            style: "height: var(--stream-height); aspect-ratio: 16 / 9; width: var(--content-width);",
-                            class: "rounded-lg bg-gray-800 shadow-lg",
-                            allow: "camera;autoplay",
-                        }
-                        canvas {
-                            id: "spec",
-                            style: "height: var(--spec-height); aspect-ratio: 16 / 4; width: var(--content-width);",
-                            class: "rounded-lg bg-black shadow-lg",
-                        }
-                    }
-
-                // Grafana panels grid
                 div {
-                    class: "w-full max-w-7xl grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4",
-
-                    // Temperature panel
-                        // <iframe src="http://localhost:3000/d-solo/adv7pb5/voegeli?orgId=1&timezone=browser&refresh=5s&panelId=panel-7&__feature.dashboardSceneSolo=true" width="450" height="200" frameborder="0"></iframe>
+                    class: "w-full flex flex-col items-center gap-6 px-4",
+                    style: "--content-width: min(100%, 1280px); --stream-height: calc(var(--content-width) * 9 / 16); --spec-height: calc(var(--content-width) * 4 / 16);",
                     iframe {
-                        src: format!("{}/d-solo/{}?orgId=1&timezone=browser&refresh=5s&panelId=panel-7&__feature.dashboardSceneSolo=true&from=now-6h&to=now", cfg.grafana_base_url, cfg.grafana_dashboard),
-                        class: "w-full h-64 rounded-lg border-2 border-slate-700",
+                        src: stream_url,
+                        style: "height: var(--stream-height); aspect-ratio: 16 / 9; width: var(--content-width);",
+                        class: "rounded-lg bg-gray-800 shadow-lg",
+                        allow: "camera;autoplay",
                     }
-
-                    // Humidity panel
-                    iframe {
-                        src: format!("{}/d-solo/{}?orgId=1&timezone=browser&refresh=5s&panelId=panel-8&__feature.dashboardSceneSolo=true&from=now-6h&to=now", cfg.grafana_base_url, cfg.grafana_dashboard),
-                        class: "w-full h-64 rounded-lg border-2 border-slate-700",
-                    }
-
-                    // CO2 panel
-                    iframe {
-                        src: format!("{}/d-solo/{}?orgId=1&timezone=browser&refresh=5s&panelId=panel-9&__feature.dashboardSceneSolo=true&from=now-6h&to=now", cfg.grafana_base_url, cfg.grafana_dashboard),
-                        class: "w-full h-64 rounded-lg border-2 border-slate-700",
-                    }
-
-                    // Motion panel
-                    iframe {
-                        src: format!("{}/d-solo/{}?orgId=1&timezone=browser&refresh=5s&panelId=panel-10&__feature.dashboardSceneSolo=true&from=now-6h&to=now", cfg.grafana_base_url, cfg.grafana_dashboard),
-                        class: "w-full h-64 rounded-lg border-2 border-slate-700",
-                    }
-
-                    // Visitors panel
-                    iframe {
-                        src: format!("{}/d-solo/{}?orgId=1&timezone=browser&refresh=5s&panelId=panel-11&__feature.dashboardSceneSolo=true&from=now-6h&to=now", cfg.grafana_base_url, cfg.grafana_dashboard),
-                        class: "w-full h-64 rounded-lg border-2 border-slate-700",
+                    canvas {
+                        id: "spec",
+                        style: "height: var(--spec-height); aspect-ratio: 16 / 4; width: var(--content-width);",
+                        class: "rounded-lg bg-black shadow-lg",
                     }
                 }
+
+            // Grafana panels grid
+            div {
+                class: "w-full max-w-7xl grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4",
+
+                // Temperature panel
+                    // <iframe src="http://localhost:3000/d-solo/adv7pb5/voegeli?orgId=1&timezone=browser&refresh=5s&panelId=panel-7&__feature.dashboardSceneSolo=true" width="450" height="200" frameborder="0"></iframe>
+                iframe {
+                    src: format!("{}/d-solo/{}?orgId=1&timezone=browser&refresh=5s&panelId=panel-7&__feature.dashboardSceneSolo=true&from=now-6h&to=now", cfg.grafana_base_url, cfg.grafana_dashboard),
+                    class: "w-full h-64 rounded-lg border-2 border-slate-700",
                 }
-        }
+
+                // Humidity panel
+                iframe {
+                    src: format!("{}/d-solo/{}?orgId=1&timezone=browser&refresh=5s&panelId=panel-8&__feature.dashboardSceneSolo=true&from=now-6h&to=now", cfg.grafana_base_url, cfg.grafana_dashboard),
+                    class: "w-full h-64 rounded-lg border-2 border-slate-700",
+                }
+
+                // CO2 panel
+                iframe {
+                    src: format!("{}/d-solo/{}?orgId=1&timezone=browser&refresh=5s&panelId=panel-9&__feature.dashboardSceneSolo=true&from=now-6h&to=now", cfg.grafana_base_url, cfg.grafana_dashboard),
+                    class: "w-full h-64 rounded-lg border-2 border-slate-700",
+                }
+
+                // Motion panel
+                iframe {
+                    src: format!("{}/d-solo/{}?orgId=1&timezone=browser&refresh=5s&panelId=panel-10&__feature.dashboardSceneSolo=true&from=now-6h&to=now", cfg.grafana_base_url, cfg.grafana_dashboard),
+                    class: "w-full h-64 rounded-lg border-2 border-slate-700",
+                }
+
+                // Visitors panel
+                iframe {
+                    src: format!("{}/d-solo/{}?orgId=1&timezone=browser&refresh=5s&panelId=panel-11&__feature.dashboardSceneSolo=true&from=now-6h&to=now", cfg.grafana_base_url, cfg.grafana_dashboard),
+                    class: "w-full h-64 rounded-lg border-2 border-slate-700",
+                }
+            }
+            }
+    }
 }
