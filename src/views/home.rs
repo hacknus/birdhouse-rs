@@ -490,7 +490,7 @@ pub fn Home() -> Element {
                     style: "--content-width: min(100%, 1280px); --stream-height: calc(var(--content-width) * 9 / 16); --spec-height: calc(var(--content-width) * 4 / 16);",
                     iframe {
                         src: stream_url,
-                        style: "height: var(--stream-height); aspect-ratio: 16 / 9; width: var(--content-width);",
+                        style: "height: var(--stream-height); aspect-ratio: 16 / 9; width: var(--content-width); filter: grayscale(100%);",
                         class: "rounded-lg bg-gray-800 shadow-lg",
                         allow: "camera;autoplay",
                     }
