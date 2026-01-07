@@ -99,32 +99,49 @@ pub fn Home() -> Element {
     let mut ir_filter_enabled = tcp_state.ir_filter_enabled;
     let mut is_admin_user = tcp_state.is_admin;
 
-    {
-        let mut ir_enabled_signal = ir_enabled.clone();
-        use_resource(move || async move {
-            if let Ok(state) = get_ir_state().await {
-                ir_enabled_signal.set(state);
-            }
-        });
-    }
+    // Track if initial states are loaded
+    let mut initial_states_loaded = use_signal(|| false);
 
-    {
-        let mut ir_filter_signal = ir_filter_enabled.clone();
-        use_resource(move || async move {
-            if let Ok(state) = get_admin_feature_state().await {
-                ir_filter_signal.set(state);
-            }
-        });
-    }
+    // Load initial states from server
+    let ir_state_resource = use_resource(move || async move {
+        get_ir_state().await.ok()
+    });
 
-    {
-        let mut admin_signal = is_admin_user.clone();
-        use_resource(move || async move {
-            if let Ok(admin) = is_admin().await {
-                admin_signal.set(admin);
+    let ir_filter_resource = use_resource(move || async move {
+        get_admin_feature_state().await.ok()
+    });
+
+    let admin_resource = use_resource(move || async move {
+        is_admin().await.ok()
+    });
+
+    // Update signals when all resources are ready
+    use_effect(move || {
+        let ir_ready = ir_state_resource.read().is_some();
+        let filter_ready = ir_filter_resource.read().is_some();
+        let admin_ready = admin_resource.read().is_some();
+
+        if ir_ready && filter_ready && admin_ready && !initial_states_loaded() {
+            if let Some(Some(state)) = ir_state_resource.read().as_ref() {
+                ir_enabled.set(*state);
             }
-        });
-    }
+            if let Some(Some(state)) = ir_filter_resource.read().as_ref() {
+                ir_filter_enabled.set(*state);
+            }
+            if let Some(Some(admin)) = admin_resource.read().as_ref() {
+                is_admin_user.set(*admin);
+            }
+            initial_states_loaded.set(true);
+        }
+    });
+
+    // Only initialize WebSocket after initial states are loaded
+    #[cfg(target_arch = "wasm32")]
+    use_effect(move || {
+        if initial_states_loaded() && tcp_state.ws_initialized.read().is_none() {
+            tcp_state.init_websocket();
+        }
+    });
 
     // Check admin status on mount
     use_resource(move || async move {
@@ -481,11 +498,4 @@ pub fn Home() -> Element {
                 }
                 }
         }
-}
-
-#[derive(Clone, serde::Serialize, serde::Deserialize, Debug)]
-struct StateUpdate {
-    #[serde(rename = "type")]
-    update_type: String,
-    enabled: bool,
 }

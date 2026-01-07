@@ -35,7 +35,7 @@ const TAILWIND_CSS: Asset = asset!("/assets/tailwind.css");
 
 #[component]
 fn App() -> Element {
-    let tcp_state = use_context_provider(|| tcp_state::TcpState::new());
+    let mut tcp_state = use_context_provider(|| tcp_state::TcpState::new());
 
     #[cfg(target_arch = "wasm32")]
     use_effect(move || {
