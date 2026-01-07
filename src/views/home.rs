@@ -46,14 +46,22 @@ async fn toggle_ir_led(enabled: bool) -> Result<bool, ServerFnError> {
     }
 }
 
+// Update server functions to have shorter timeouts
 #[server]
 async fn get_ir_state() -> Result<bool, ServerFnError> {
-    match tcp_client::send_command("[CMD] GET IR STATE") {
-        Ok(response) => {
+    use tokio::time::{timeout, Duration};
+
+    let result = timeout(Duration::from_secs(2), async {
+        tcp_client::send_command("[CMD] GET IR STATE")
+    }).await;
+
+    match result {
+        Ok(Ok(response)) => {
             let is_on = response.to_lowercase().contains("on") || response.contains("1");
             Ok(is_on)
         }
-        Err(e) => Err(ServerFnError::new(e)),
+        Ok(Err(e)) => Err(ServerFnError::new(e)),
+        Err(_) => Err(ServerFnError::new("TCP request timeout")),
     }
 }
 
@@ -80,14 +88,22 @@ async fn toggle_ir_filter(enabled: bool) -> Result<bool, ServerFnError> {
 
 #[server]
 async fn get_admin_feature_state() -> Result<bool, ServerFnError> {
-    match tcp_client::send_command("[CMD] GET IR FILTER STATE") {
-        Ok(response) => {
+    use tokio::time::{timeout, Duration};
+
+    let result = timeout(Duration::from_secs(2), async {
+        tcp_client::send_command("[CMD] GET IR FILTER STATE")
+    }).await;
+
+    match result {
+        Ok(Ok(response)) => {
             let is_on = response.to_lowercase().contains("on") || response.contains("1");
             Ok(is_on)
         }
-        Err(e) => Err(ServerFnError::new(e)),
+        Ok(Err(e)) => Err(ServerFnError::new(e)),
+        Err(_) => Err(ServerFnError::new("TCP request timeout")),
     }
 }
+
 
 pub fn Home() -> Element {
     let mut config = use_resource(|| async move { get_stream_config().await.ok() });
@@ -139,7 +155,12 @@ pub fn Home() -> Element {
     #[cfg(target_arch = "wasm32")]
     use_effect(move || {
         if initial_states_loaded() && tcp_state.ws_initialized.read().is_none() {
-            tcp_state.init_websocket();
+            // Add 500ms delay to ensure resources are fully applied
+            spawn(async move {
+                #[cfg(target_arch = "wasm32")]
+                gloo_timers::future::sleep(std::time::Duration::from_millis(500)).await;
+                tcp_state.init_websocket();
+            });
         }
     });
 
@@ -161,6 +182,7 @@ pub fn Home() -> Element {
     #[cfg(target_arch = "wasm32")]
     let tcp_ws_handle = use_signal(|| None::<WebSocket>);
 
+    // In home.rs, add logging to debug WebSocket connection
     #[cfg(target_arch = "wasm32")]
     {
         let mut ws_store = tcp_ws_handle.clone();
@@ -177,8 +199,23 @@ pub fn Home() -> Element {
                 .location()
                 .host()
                 .unwrap_or_else(|_| "127.0.0.1:8080".into());
-            let socket =
-                WebSocket::new(&format!("ws://{host}/ws/tcp")).expect("open TCP websocket");
+
+            let ws_url = format!("ws://{host}/ws/tcp");
+            web_sys::console::log_1(&format!("Connecting to WebSocket: {}", ws_url).into());
+
+            let socket = WebSocket::new(&ws_url).expect("open TCP websocket");
+
+            let on_open = Closure::wrap(Box::new(move |_: web_sys::Event| {
+                web_sys::console::log_1(&"WebSocket connected!".into());
+            }) as Box<dyn FnMut(web_sys::Event)>);
+            socket.set_onopen(Some(on_open.as_ref().unchecked_ref()));
+            on_open.forget();
+
+            let on_error = Closure::wrap(Box::new(move |e: web_sys::ErrorEvent| {
+                web_sys::console::error_1(&format!("WebSocket error: {:?}", e).into());
+            }) as Box<dyn FnMut(web_sys::ErrorEvent)>);
+            socket.set_onerror(Some(on_error.as_ref().unchecked_ref()));
+            on_error.forget();
 
             let on_message = {
                 let mut ir_enabled_signal = ir_enabled_signal.clone();
@@ -223,6 +260,7 @@ pub fn Home() -> Element {
             ws_store.set(Some(socket));
         });
     }
+
 
     use_effect(move || {
         let ws_url = ws_url.clone();
