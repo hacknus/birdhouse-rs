@@ -51,7 +51,6 @@ fn App() -> Element {
     }
 }
 
-
 #[cfg(feature = "server")]
 #[tokio::main]
 async fn main() {
@@ -63,11 +62,17 @@ async fn main() {
         routing::get,
     };
     use dioxus::prelude::*;
+    use futures::stream;
+    use influxdb2::{models::DataPoint, Client as InfluxClient};
     use once_cell::sync::Lazy;
     use std::net::SocketAddr;
+    use std::sync::atomic::{AtomicUsize, Ordering};
     use std::sync::Arc;
     use tokio::sync::broadcast;
+    use tokio::time::{interval, Duration};
     use tower_http::services::ServeDir;
+
+    static ACTIVE_USERS: Lazy<AtomicUsize> = Lazy::new(|| AtomicUsize::new(0));
 
     static TCP_BROADCAST: Lazy<broadcast::Sender<String>> = Lazy::new(|| {
         let (tx, _) = broadcast::channel(100);
@@ -79,20 +84,59 @@ async fn main() {
     }
 
     async fn handle_tcp_socket(mut socket: WebSocket) {
+        // User connected
+        ACTIVE_USERS.fetch_add(1, Ordering::SeqCst);
+        println!(
+            "User connected, active users = {}",
+            ACTIVE_USERS.load(Ordering::Relaxed) / 2
+        );
+
         let mut rx = TCP_BROADCAST.subscribe();
 
-        while let Ok(message) = rx.recv().await {
-            if socket
-                .send(axum::extract::ws::Message::Text(message.into()))
-                .await
-                .is_err()
-            {
-                break;
+        loop {
+            tokio::select! {
+                msg = rx.recv() => {
+                    if let Ok(message) = msg {
+                        if socket
+                            .send(axum::extract::ws::Message::Text(message.into()))
+                            .await
+                            .is_err()
+                        {
+                            break;
+                        }
+                    }
+                }
+
+                // Detect client disconnect
+                result = socket.recv() => {
+                    if result.is_none() {
+                        break;
+                    }
+                }
             }
         }
+
+        // User disconnected
+        ACTIVE_USERS.fetch_sub(1, Ordering::SeqCst);
+        println!(
+            "User disconnected, active users = {}",
+            ACTIVE_USERS.load(Ordering::Relaxed)
+        );
     }
 
     dotenv::dotenv().ok();
+
+    let influx_url = std::env::var("INFLUXDB_URL").expect("INFLUXDB_URL not set");
+    let influx_org = std::env::var("INFLUXDB_ORG").expect("INFLUXDB_ORG not set");
+    let influx_token = std::env::var("INFLUXDB_WRITE_TOKEN")
+        .expect("INFLUXDB_WRITE_TOKEN not set")
+        .trim()
+        .to_string();
+
+    dbg!(&influx_token);
+    let influx_bucket = std::env::var("INFLUXDB_BUCKET").expect("INFLUXDB_BUCKET not set");
+
+    let influx = InfluxClient::new(influx_url, influx_org, influx_token);
 
     // Initialize TCP connection with encryption key
     if let (Ok(tcp_addr), Ok(tcp_key)) = (
@@ -111,6 +155,30 @@ async fn main() {
         let mut rx = tcp_client::subscribe_to_tcp_messages();
         while let Ok(message) = rx.recv().await {
             let _ = TCP_BROADCAST.send(message);
+        }
+    });
+
+    tokio::spawn({
+        let influx = influx.clone();
+        let bucket = influx_bucket.to_string();
+
+        async move {
+            let mut ticker = interval(Duration::from_secs(10));
+
+            loop {
+                ticker.tick().await;
+
+                let users = ACTIVE_USERS.load(Ordering::Relaxed);
+
+                let point = DataPoint::builder("voegeli")
+                    .field("visitors", (users / 2) as i64)
+                    .build()
+                    .unwrap();
+
+                if let Err(e) = influx.write(&bucket, stream::iter(vec![point])).await {
+                    eprintln!("InfluxDB write failed: {}", e);
+                }
+            }
         }
     });
 

@@ -495,7 +495,8 @@ pub fn Home() -> Element {
                             if !ir_filter_enabled() { "filter: grayscale(100%);" } else { "" }
                         ),
                         class: "rounded-lg bg-gray-800 shadow-lg",
-                        allow: "camera;autoplay",
+                        allow: "camera;autoplay;encrypted-media",
+                        allowfullscreen: true,
                     }
                     canvas {
                         id: "spec",
