@@ -106,6 +106,16 @@ async fn get_admin_feature_state() -> Result<bool, ServerFnError> {
     }
 }
 
+#[cfg(target_arch = "wasm32")]
+fn ws_url_from_window(path: &str) -> String {
+    let window = web_sys::window().expect("browser window");
+    let protocol = window.location().protocol().unwrap_or_else(|_| "http:".into());
+    let host = window.location().host().unwrap_or_else(|_| "127.0.0.1:8080".into());
+
+    let ws_protocol = if protocol == "https:" { "wss" } else { "ws" };
+    format!("{}://{}{}", ws_protocol, host, path)
+}
+
 pub fn Home() -> Element {
     let mut config = use_resource(|| async move { get_stream_config().await.ok() });
     let mut _ws_task = use_signal(|| None::<Task>);
@@ -202,7 +212,7 @@ pub fn Home() -> Element {
 
             // Use wss:// if the page is served over https://
             let ws_protocol = if protocol == "https:" { "wss" } else { "ws" };
-            let ws_url = format!("{}://{}/ws/tcp", ws_protocol, host);
+            let ws_url = ws_url_from_window("/ws/tcp");
 
             web_sys::console::log_1(&format!("Connecting to: {}", ws_url).into());
 
@@ -256,6 +266,12 @@ pub fn Home() -> Element {
                     }
                 }) as Box<dyn FnMut(_)>)
             };
+
+            let on_close = Closure::wrap(Box::new(move |e: web_sys::CloseEvent| {
+                web_sys::console::warn_1(&format!("WebSocket closed: code={} reason={}", e.code(), e.reason()).into());
+            }) as Box<dyn FnMut(_)>);
+            socket.set_onclose(Some(on_close.as_ref().unchecked_ref()));
+            on_close.forget();
 
             socket.set_onmessage(Some(on_message.as_ref().unchecked_ref()));
             on_message.forget();
@@ -495,7 +511,7 @@ pub fn Home() -> Element {
                             if !ir_filter_enabled() { "filter: grayscale(100%);" } else { "" }
                         ),
                         class: "rounded-lg bg-gray-800 shadow-lg",
-                        allow: "camera;autoplay;encrypted-media",
+                        allow: "x-webkit-airplay;autoplay;encrypted-media;picture-in-picture",
                         allowfullscreen: true,
                     }
                     canvas {
