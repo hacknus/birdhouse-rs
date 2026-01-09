@@ -1,10 +1,11 @@
 use encryption::Cipher;
 use once_cell::sync::Lazy;
-use std::io::{Read, Write};
-use std::net::{TcpStream, ToSocketAddrs};
-use std::sync::Mutex;
+use std::net::ToSocketAddrs;
 use std::time::Duration;
-use tokio::sync::broadcast;
+use tokio::io::{AsyncReadExt, AsyncWriteExt};
+use tokio::net::TcpStream;
+use tokio::sync::{broadcast, Mutex};
+use tokio::time::timeout;
 
 static MESSAGE_BROADCAST: Lazy<broadcast::Sender<String>> = Lazy::new(|| {
     let (tx, _) = broadcast::channel(100);
@@ -14,6 +15,7 @@ static MESSAGE_BROADCAST: Lazy<broadcast::Sender<String>> = Lazy::new(|| {
 pub fn subscribe_to_tcp_messages() -> broadcast::Receiver<String> {
     MESSAGE_BROADCAST.subscribe()
 }
+
 struct TcpConnection {
     stream: TcpStream,
     cipher: Cipher,
@@ -21,10 +23,9 @@ struct TcpConnection {
 
 static TCP_CONNECTION: Lazy<Mutex<Option<TcpConnection>>> = Lazy::new(|| Mutex::new(None));
 
-pub fn connect(addr: &str, key: &str) -> Result<(), String> {
+async fn establish_connection(addr: &str, key: &str) -> Result<(), String> {
     let cipher = Cipher::new(key, 30);
 
-    // Resolve the address
     let socket_addrs: Vec<_> = addr
         .to_socket_addrs()
         .map_err(|e| format!("Failed to resolve address '{}': {}", addr, e))?
@@ -34,37 +35,29 @@ pub fn connect(addr: &str, key: &str) -> Result<(), String> {
         return Err(format!("No valid addresses found for '{}'", addr));
     }
 
-    let mut stream = TcpStream::connect_timeout(&socket_addrs[0], Duration::from_secs(5))
+    let mut stream = timeout(Duration::from_secs(5), TcpStream::connect(&socket_addrs[0]))
+        .await
+        .map_err(|_| "Connection timeout".to_string())?
         .map_err(|e| format!("Connection failed to '{}': {}", addr, e))?;
 
-    // Authenticate: send encrypted local IP address with \n terminator
     let local_ip = stream
         .local_addr()
         .map_err(|e| format!("Failed to get local address: {}", e))?
         .ip()
         .to_string();
 
-    println!("key: '{:?}'", key);
-    println!("Local IP: '{}'", local_ip);
-    println!("Socket Addrs: '{:?}'", socket_addrs);
-
     let mut auth_message = cipher.encrypt_message(&local_ip);
-    auth_message.push('\n'); // Use \n for authentication (matches original tcp.rs)
-
-    println!("Auth msg: '{:?}'", auth_message);
+    auth_message.push('\n');
 
     stream
         .write_all(auth_message.as_bytes())
+        .await
         .map_err(|e| format!("Failed to send authentication: {}", e))?;
 
-    // Wait for authentication response
-    stream
-        .set_read_timeout(Some(Duration::from_secs(5)))
-        .map_err(|e| format!("Failed to set timeout: {}", e))?;
-
     let mut buffer = vec![0u8; 256];
-    let n = stream
-        .read(&mut buffer)
+    let n = timeout(Duration::from_secs(5), stream.read(&mut buffer))
+        .await
+        .map_err(|_| "Authentication timeout".to_string())?
         .map_err(|e| format!("Failed to read authentication response: {}", e))?;
 
     let response = String::from_utf8_lossy(&buffer[..n]).to_string();
@@ -73,39 +66,68 @@ pub fn connect(addr: &str, key: &str) -> Result<(), String> {
         return Err(format!("Authentication failed: {}", response));
     }
 
-    // Set shorter read timeout for normal operation
-    stream
-        .set_read_timeout(Some(Duration::from_millis(500)))
-        .map_err(|e| format!("Failed to set timeout: {}", e))?;
+    *TCP_CONNECTION.lock().await = Some(TcpConnection { stream, cipher });
 
-    let mut reader_stream = stream
-        .try_clone()
-        .map_err(|e| format!("Failed to clone stream: {}", e))?;
+    Ok(())
+}
 
-    *TCP_CONNECTION.lock().unwrap() = Some(TcpConnection { stream, cipher });
+pub async fn connect(addr: &str, key: &str) -> Result<(), String> {
+    establish_connection(addr, key).await?;
 
-    // Spawn background task to read TCP messages
-    std::thread::spawn(move || {
-        let mut buffer = vec![0u8; 256];
+    let addr_owned = addr.to_string();
+    let key_owned = key.to_string();
+
+    tokio::spawn(async move {
         loop {
-            match reader_stream.read(&mut buffer) {
-                Ok(n) if n > 0 => {
-                    // Trim null bytes and convert to string
-                    let message = String::from_utf8_lossy(&buffer[..n])
-                        .trim_matches('\0')
-                        .trim()
-                        .to_string();
+            let mut buffer = vec![0u8; 256];
+            let mut consecutive_errors = 0;
 
-                    if !message.is_empty() {
-                        println!("[SERVER] Received: {}", message);
+            loop {
+                let has_connection = TCP_CONNECTION.lock().await.is_some();
+
+                if !has_connection {
+                    break;
+                }
+
+                let read_result = {
+                    let mut guard = TCP_CONNECTION.lock().await;
+                    let connection = match guard.as_mut() {
+                        Some(conn) => conn,
+                        None => break,
+                    };
+
+                    timeout(Duration::from_secs(2), connection.stream.read(&mut buffer)).await
+                };
+
+                match read_result {
+                    Ok(Ok(n)) if n > 0 => {
+                        let message = String::from_utf8_lossy(&buffer[..n]).to_string();
                         let _ = MESSAGE_BROADCAST.send(message);
+                        consecutive_errors = 0;
                     }
+                    Ok(Ok(_)) => {
+                        eprintln!("[TCP] Connection closed by server");
+                        break;
+                    }
+                    Ok(Err(e)) => {
+                        consecutive_errors += 1;
+                        eprintln!("[TCP] Read error ({}): {}", consecutive_errors, e);
+                        if consecutive_errors > 3 {
+                            break;
+                        }
+                        tokio::time::sleep(Duration::from_millis(500)).await;
+                    }
+                    Err(_) => continue,
                 }
-                Err(e) if e.kind() == std::io::ErrorKind::WouldBlock => {
-                    std::thread::sleep(Duration::from_millis(10));
-                    continue;
-                }
-                _ => break,
+            }
+
+            *TCP_CONNECTION.lock().await = None;
+            eprintln!("[TCP] Attempting reconnection in 5 seconds...");
+            tokio::time::sleep(Duration::from_secs(5)).await;
+
+            match establish_connection(&addr_owned, &key_owned).await {
+                Ok(_) => println!("[TCP] Reconnected successfully"),
+                Err(e) => eprintln!("[TCP] Reconnection failed: {}", e),
             }
         }
     });
@@ -113,28 +135,26 @@ pub fn connect(addr: &str, key: &str) -> Result<(), String> {
     Ok(())
 }
 
-pub fn send_command(cmd: &str) -> Result<String, String> {
-    let mut guard = TCP_CONNECTION.lock().unwrap();
+pub async fn send_command(cmd: &str) -> Result<String, String> {
+    let mut guard = TCP_CONNECTION.lock().await;
     let connection = guard.as_mut().ok_or("Not connected")?;
 
-    // Encrypt the command and add \r\n terminator (matches original tcp.rs)
     let mut encrypted = connection.cipher.encrypt_message(cmd);
     encrypted.push_str("\r\n");
 
-    connection
-        .stream
-        .write_all(encrypted.as_bytes())
+    timeout(
+        Duration::from_secs(3),
+        connection.stream.write_all(encrypted.as_bytes()),
+    )
+        .await
+        .map_err(|_| "Write timeout".to_string())?
         .map_err(|e| format!("Write failed: {}", e))?;
 
-    // Read response
     let mut buffer = vec![0u8; 256];
-    match connection.stream.read(&mut buffer) {
-        Ok(n) if n > 0 => {
-            let response = String::from_utf8_lossy(&buffer[..n]).to_string();
-            Ok(response)
-        }
-        Ok(_) => Ok(String::new()),
-        Err(e) if e.kind() == std::io::ErrorKind::WouldBlock => Ok(String::new()),
-        Err(e) => Err(format!("Read failed: {}", e)),
+    match timeout(Duration::from_secs(3), connection.stream.read(&mut buffer)).await {
+        Ok(Ok(n)) if n > 0 => Ok(String::from_utf8_lossy(&buffer[..n]).to_string()),
+        Ok(Ok(_)) => Ok(String::new()),
+        Ok(Err(e)) => Err(format!("Read failed: {}", e)),
+        Err(_) => Ok(String::new()),
     }
 }

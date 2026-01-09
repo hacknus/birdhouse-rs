@@ -83,7 +83,6 @@ async fn main() {
         ws.on_upgrade(handle_tcp_socket)
     }
 
-
     async fn handle_tcp_socket(mut socket: WebSocket) {
         ACTIVE_USERS.fetch_add(1, Ordering::SeqCst);
         println!(
@@ -96,34 +95,34 @@ async fn main() {
 
         loop {
             tokio::select! {
-            _ = ping.tick() => {
-                if socket
-                    .send(axum::extract::ws::Message::Ping(vec![].into()))
-                    .await
-                    .is_err()
-                {
-                    break;
-                }
-            }
-
-            msg = rx.recv() => {
-                if let Ok(message) = msg {
+                _ = ping.tick() => {
                     if socket
-                        .send(axum::extract::ws::Message::Text(message.into()))
+                        .send(axum::extract::ws::Message::Ping(vec![].into()))
                         .await
                         .is_err()
                     {
                         break;
                     }
                 }
-            }
 
-            result = socket.recv() => {
-                if result.is_none() {
-                    break;
+                msg = rx.recv() => {
+                    if let Ok(message) = msg {
+                        if socket
+                            .send(axum::extract::ws::Message::Text(message.into()))
+                            .await
+                            .is_err()
+                        {
+                            break;
+                        }
+                    }
+                }
+
+                result = socket.recv() => {
+                    if result.is_none() {
+                        break;
+                    }
                 }
             }
-        }
         }
 
         ACTIVE_USERS.fetch_sub(1, Ordering::SeqCst);
@@ -152,12 +151,10 @@ async fn main() {
         std::env::var("TCP_SERVER_ADDR"),
         std::env::var("TCP_ENCRYPTION_KEY"),
     ) {
-        match tcp_client::connect(&tcp_addr, &tcp_key.trim()) {
+        match tcp_client::connect(&tcp_addr, &tcp_key.trim()).await {
             Ok(_) => println!("Connected to TCP server: {}", tcp_addr),
             Err(e) => eprintln!("Failed to connect to TCP server: {}", e),
         }
-    } else {
-        eprintln!("TCP_SERVER_ADDR or TCP_ENCRYPTION_KEY not set in environment");
     }
 
     tokio::spawn(async {

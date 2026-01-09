@@ -40,37 +40,10 @@ async fn toggle_ir_led(enabled: bool) -> Result<bool, ServerFnError> {
         "[CMD] IR OFF"
     };
 
-    match tcp_client::send_command(cmd) {
-        Ok(_) => Ok(enabled),
-        Err(e) => Err(ServerFnError::new(e)),
-    }
-}
-
-// Update server functions to have shorter timeouts
-#[server]
-async fn get_ir_state() -> Result<bool, ServerFnError> {
-    use tokio::time::{timeout, Duration};
-
-    let result = timeout(Duration::from_secs(2), async {
-        tcp_client::send_command("[CMD] GET IR STATE")
-    })
-    .await;
-
-    match result {
-        Ok(Ok(response)) => {
-            let is_on = response.to_lowercase().contains("on") || response.contains("1");
-            Ok(is_on)
-        }
-        Ok(Err(e)) => Err(ServerFnError::new(e)),
-        Err(_) => Err(ServerFnError::new("TCP request timeout")),
-    }
-}
-
-#[server]
-async fn is_admin() -> Result<bool, ServerFnError> {
-    // TODO: Implement actual admin check (e.g., check session, JWT token, etc.)
-    // For now, return false
-    Ok(false)
+    tcp_client::send_command(cmd)
+        .await
+        .map(|_| enabled)
+        .map_err(ServerFnError::new)
 }
 
 #[server]
@@ -81,29 +54,35 @@ async fn toggle_ir_filter(enabled: bool) -> Result<bool, ServerFnError> {
         "[CMD] IR FILTER OFF"
     };
 
-    match tcp_client::send_command(cmd) {
-        Ok(_) => Ok(enabled),
-        Err(e) => Err(ServerFnError::new(e)),
-    }
+    tcp_client::send_command(cmd)
+        .await
+        .map(|_| enabled)
+        .map_err(ServerFnError::new)
+}
+
+#[server]
+async fn get_ir_state() -> Result<bool, ServerFnError> {
+    let response = tcp_client::send_command("[CMD] GET IR STATE")
+        .await
+        .map_err(|e| ServerFnError::new(e))?;
+    let is_on = response.to_lowercase().contains("on") || response.contains("1");
+    Ok(is_on)
 }
 
 #[server]
 async fn get_admin_feature_state() -> Result<bool, ServerFnError> {
-    use tokio::time::{timeout, Duration};
+    let response = tcp_client::send_command("[CMD] GET IR FILTER STATE")
+        .await
+        .map_err(|e| ServerFnError::new(e))?;
+    let is_on = response.to_lowercase().contains("on") || response.contains("1");
+    Ok(is_on)
+}
 
-    let result = timeout(Duration::from_secs(2), async {
-        tcp_client::send_command("[CMD] GET IR FILTER STATE")
-    })
-    .await;
-
-    match result {
-        Ok(Ok(response)) => {
-            let is_on = response.to_lowercase().contains("on") || response.contains("1");
-            Ok(is_on)
-        }
-        Ok(Err(e)) => Err(ServerFnError::new(e)),
-        Err(_) => Err(ServerFnError::new("TCP request timeout")),
-    }
+#[server]
+async fn is_admin() -> Result<bool, ServerFnError> {
+    // TODO: Implement actual admin check (e.g., check session, JWT token, etc.)
+    // For now, return false
+    Ok(false)
 }
 
 pub fn Home() -> Element {
