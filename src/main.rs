@@ -207,33 +207,13 @@ async fn main() {
 
     println!("Listening on http://{}", addr);
 
-    let serve_config = ServeConfig::builder()
-        .connection_handler(|event| async move {
-            match event {
-                dioxus::server::ConnectionEvent::Connected { .. } => {
-                    ACTIVE_USERS.fetch_add(1, Ordering::SeqCst);
-                    println!(
-                        "Dioxus user connected = {}",
-                        ACTIVE_USERS.load(Ordering::Relaxed)
-                    );
-                }
-                dioxus::server::ConnectionEvent::Disconnected { .. } => {
-                    ACTIVE_USERS.fetch_sub(1, Ordering::SeqCst);
-                    println!(
-                        "Dioxus user disconnected = {}",
-                        ACTIVE_USERS.load(Ordering::Relaxed)
-                    );
-                }
-            }
-        })
-        .build();
-
     let router = Router::new()
         .route("/voegeli", get(|| async { Redirect::temporary("/") }))
         .route("/ws/tcp", get(tcp_websocket_handler)) // New endpoint
+        .route("/_dioxus/ws", get(dioxus_ws_counter))
+        .serve_dioxus_application(ServeConfig::default(), App)
         .nest_service("/assets", ServeDir::new("public/assets"))
-        .nest_service("/gallery_cache", ServeDir::new("public/gallery_cache"))
-        .serve_dioxus_application(serve_config, App);
+        .nest_service("/gallery_cache", ServeDir::new("public/gallery_cache"));
 
     let listener = tokio::net::TcpListener::bind(&addr).await.unwrap();
     axum::serve(listener, router.into_make_service())
