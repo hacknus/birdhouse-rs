@@ -83,9 +83,26 @@ async fn main() {
         ws.on_upgrade(handle_tcp_socket)
     }
 
+    async fn dioxus_ws_counter(ws: WebSocketUpgrade) -> impl IntoResponse {
+        ws.on_upgrade(|mut socket| async move {
+            ACTIVE_USERS.fetch_add(1, Ordering::SeqCst);
+            println!(
+                "Dioxus user connected = {}",
+                ACTIVE_USERS.load(Ordering::Relaxed)
+            );
+
+            while socket.recv().await.is_some() {}
+
+            ACTIVE_USERS.fetch_sub(1, Ordering::SeqCst);
+            println!(
+                "Dioxus user disconnected = {}",
+                ACTIVE_USERS.load(Ordering::Relaxed)
+            );
+        })
+    }
+
     async fn handle_tcp_socket(mut socket: WebSocket) {
         // User connected
-        ACTIVE_USERS.fetch_add(1, Ordering::SeqCst);
         println!(
             "User connected, active users = {}",
             ACTIVE_USERS.load(Ordering::Relaxed) / 2
@@ -117,7 +134,6 @@ async fn main() {
         }
 
         // User disconnected
-        ACTIVE_USERS.fetch_sub(1, Ordering::SeqCst);
         println!(
             "User disconnected, active users = {}",
             ACTIVE_USERS.load(Ordering::Relaxed)
@@ -194,6 +210,7 @@ async fn main() {
     let router = Router::new()
         .route("/voegeli", get(|| async { Redirect::temporary("/") }))
         .route("/ws/tcp", get(tcp_websocket_handler)) // New endpoint
+        .route("/_dioxus/ws", get(dioxus_ws_counter))
         .serve_dioxus_application(ServeConfig::default(), App)
         .nest_service("/assets", ServeDir::new("public/assets"))
         .nest_service("/gallery_cache", ServeDir::new("public/gallery_cache"));
