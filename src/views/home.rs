@@ -150,10 +150,8 @@ pub fn Home() -> Element {
     // Only initialize WebSocket after initial states are loaded
     #[cfg(target_arch = "wasm32")]
     use_effect(move || {
-        if initial_states_loaded() && tcp_state.ws_initialized.read().is_none() {
-            // Add 500ms delay to ensure resources are fully applied
+        if initial_states_loaded() && !*tcp_state.ws_connected.read() {
             spawn(async move {
-                #[cfg(target_arch = "wasm32")]
                 gloo_timers::future::sleep(std::time::Duration::from_millis(500)).await;
                 tcp_state.init_websocket();
             });
@@ -179,90 +177,90 @@ pub fn Home() -> Element {
     let tcp_ws_handle = use_signal(|| None::<WebSocket>);
 
     // In home.rs, add logging to debug WebSocket connection
-    #[cfg(target_arch = "wasm32")]
-    {
-        let mut ws_store = tcp_ws_handle.clone();
-        let mut ir_enabled_signal = ir_enabled.clone();
-        let mut ir_filter_signal = ir_filter_enabled.clone();
-
-        use_effect(move || {
-            if ws_store.read().is_some() {
-                return;
-            }
-
-            let window = web_sys::window().expect("browser window");
-            let protocol = window
-                .location()
-                .protocol()
-                .unwrap_or_else(|_| "http:".into());
-            let host = window
-                .location()
-                .host()
-                .unwrap_or_else(|_| "127.0.0.1:8080".into());
-
-            // Use wss:// if the page is served over https://
-            let ws_protocol = if protocol == "https:" { "wss" } else { "ws" };
-            let ws_url = format!("{}://{}/ws/tcp", ws_protocol, host);
-
-            web_sys::console::log_1(&format!("Connecting to: {}", ws_url).into());
-
-            let socket = WebSocket::new(&ws_url).expect("open TCP websocket");
-
-            let on_open = Closure::wrap(Box::new(move |_: web_sys::Event| {
-                web_sys::console::log_1(&"WebSocket connected!".into());
-            }) as Box<dyn FnMut(web_sys::Event)>);
-            socket.set_onopen(Some(on_open.as_ref().unchecked_ref()));
-            on_open.forget();
-
-            let on_error = Closure::wrap(Box::new(move |e: web_sys::ErrorEvent| {
-                web_sys::console::error_1(&format!("WebSocket error: {:?}", e).into());
-            }) as Box<dyn FnMut(web_sys::ErrorEvent)>);
-            socket.set_onerror(Some(on_error.as_ref().unchecked_ref()));
-            on_error.forget();
-
-            let on_message = {
-                let mut ir_enabled_signal = ir_enabled_signal.clone();
-                let mut ir_filter_signal = ir_filter_signal.clone();
-                Closure::wrap(Box::new(move |event: MessageEvent| {
-                    if let Some(text) = event.data().as_string() {
-                        let payload = text.to_uppercase();
-                        match () {
-                            _ if payload.contains("IR LED STATE: ON")
-                                || payload.contains("IR STATE IS ON")
-                                || payload.contains("IR ON") =>
-                            {
-                                ir_enabled_signal.set(true);
-                            }
-                            _ if payload.contains("IR LED STATE: OFF")
-                                || payload.contains("IR STATE IS OFF")
-                                || payload.contains("IR OFF") =>
-                            {
-                                ir_enabled_signal.set(false);
-                            }
-                            _ if payload.contains("IR FILTER STATE: ON")
-                                || payload.contains("IR FILTER STATE IS ON")
-                                || payload.contains("IR FILTER ON") =>
-                            {
-                                ir_filter_signal.set(true);
-                            }
-                            _ if payload.contains("IR FILTER STATE: OFF")
-                                || payload.contains("IR FILTER STATE IS OFF")
-                                || payload.contains("IR FILTER OFF") =>
-                            {
-                                ir_filter_signal.set(false);
-                            }
-                            _ => {}
-                        }
-                    }
-                }) as Box<dyn FnMut(_)>)
-            };
-
-            socket.set_onmessage(Some(on_message.as_ref().unchecked_ref()));
-            on_message.forget();
-
-            ws_store.set(Some(socket));
-        });
-    }
+    // #[cfg(target_arch = "wasm32")]
+    // {
+    //     let mut ws_store = tcp_ws_handle.clone();
+    //     let mut ir_enabled_signal = ir_enabled.clone();
+    //     let mut ir_filter_signal = ir_filter_enabled.clone();
+    //
+    //     use_effect(move || {
+    //         if ws_store.read().is_some() {
+    //             return;
+    //         }
+    //
+    //         let window = web_sys::window().expect("browser window");
+    //         let protocol = window
+    //             .location()
+    //             .protocol()
+    //             .unwrap_or_else(|_| "http:".into());
+    //         let host = window
+    //             .location()
+    //             .host()
+    //             .unwrap_or_else(|_| "127.0.0.1:8080".into());
+    //
+    //         // Use wss:// if the page is served over https://
+    //         let ws_protocol = if protocol == "https:" { "wss" } else { "ws" };
+    //         let ws_url = format!("{}://{}/ws/tcp", ws_protocol, host);
+    //
+    //         web_sys::console::log_1(&format!("Connecting to: {}", ws_url).into());
+    //
+    //         let socket = WebSocket::new(&ws_url).expect("open TCP websocket");
+    //
+    //         let on_open = Closure::wrap(Box::new(move |_: web_sys::Event| {
+    //             web_sys::console::log_1(&"WebSocket connected!".into());
+    //         }) as Box<dyn FnMut(web_sys::Event)>);
+    //         socket.set_onopen(Some(on_open.as_ref().unchecked_ref()));
+    //         on_open.forget();
+    //
+    //         let on_error = Closure::wrap(Box::new(move |e: web_sys::ErrorEvent| {
+    //             web_sys::console::error_1(&format!("WebSocket error: {:?}", e).into());
+    //         }) as Box<dyn FnMut(web_sys::ErrorEvent)>);
+    //         socket.set_onerror(Some(on_error.as_ref().unchecked_ref()));
+    //         on_error.forget();
+    //
+    //         let on_message = {
+    //             let mut ir_enabled_signal = ir_enabled_signal.clone();
+    //             let mut ir_filter_signal = ir_filter_signal.clone();
+    //             Closure::wrap(Box::new(move |event: MessageEvent| {
+    //                 if let Some(text) = event.data().as_string() {
+    //                     let payload = text.to_uppercase();
+    //                     match () {
+    //                         _ if payload.contains("IR LED STATE: ON")
+    //                             || payload.contains("IR STATE IS ON")
+    //                             || payload.contains("IR ON") =>
+    //                         {
+    //                             ir_enabled_signal.set(true);
+    //                         }
+    //                         _ if payload.contains("IR LED STATE: OFF")
+    //                             || payload.contains("IR STATE IS OFF")
+    //                             || payload.contains("IR OFF") =>
+    //                         {
+    //                             ir_enabled_signal.set(false);
+    //                         }
+    //                         _ if payload.contains("IR FILTER STATE: ON")
+    //                             || payload.contains("IR FILTER STATE IS ON")
+    //                             || payload.contains("IR FILTER ON") =>
+    //                         {
+    //                             ir_filter_signal.set(true);
+    //                         }
+    //                         _ if payload.contains("IR FILTER STATE: OFF")
+    //                             || payload.contains("IR FILTER STATE IS OFF")
+    //                             || payload.contains("IR FILTER OFF") =>
+    //                         {
+    //                             ir_filter_signal.set(false);
+    //                         }
+    //                         _ => {}
+    //                     }
+    //                 }
+    //             }) as Box<dyn FnMut(_)>)
+    //         };
+    //
+    //         socket.set_onmessage(Some(on_message.as_ref().unchecked_ref()));
+    //         on_message.forget();
+    //
+    //         ws_store.set(Some(socket));
+    //     });
+    // }
 
     use_effect(move || {
         let ws_url = ws_url.clone();

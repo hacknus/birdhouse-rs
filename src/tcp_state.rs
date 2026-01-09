@@ -9,7 +9,7 @@ pub struct TcpState {
     pub ir_enabled: Signal<bool>,
     pub ir_filter_enabled: Signal<bool>,
     pub is_admin: Signal<bool>,
-    pub ws_initialized: Signal<Option<()>>,
+    pub ws_connected: Signal<bool>,
 }
 
 impl TcpState {
@@ -18,19 +18,13 @@ impl TcpState {
             ir_enabled: Signal::new(false),
             ir_filter_enabled: Signal::new(false),
             is_admin: Signal::new(false),
-            ws_initialized: Signal::new(None),
+            ws_connected: Signal::new(false),
         }
     }
 
     #[cfg(target_arch = "wasm32")]
     pub fn init_websocket(&mut self) {
-        if self.ws_initialized.read().is_some() {
-            return;
-        }
-        static WS_INITIALIZED: std::sync::atomic::AtomicBool =
-            std::sync::atomic::AtomicBool::new(false);
-
-        if WS_INITIALIZED.swap(true, std::sync::atomic::Ordering::SeqCst) {
+        if *self.ws_connected.read() {
             return;
         }
 
@@ -87,6 +81,6 @@ impl TcpState {
         socket.set_onmessage(Some(on_message.as_ref().unchecked_ref()));
         on_message.forget();
 
-        self.ws_initialized.set(Some(()));
+        self.ws_connected.set(true);
     }
 }

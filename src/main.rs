@@ -83,61 +83,37 @@ async fn main() {
         ws.on_upgrade(handle_tcp_socket)
     }
 
-    async fn dioxus_ws_counter(ws: WebSocketUpgrade) -> impl IntoResponse {
-        ws.on_upgrade(|mut socket| async move {
-            ACTIVE_USERS.fetch_add(1, Ordering::SeqCst);
-            println!(
-                "Dioxus user connected = {}",
-                ACTIVE_USERS.load(Ordering::Relaxed)
-            );
-
-            while socket.recv().await.is_some() {}
-
-            ACTIVE_USERS.fetch_sub(1, Ordering::SeqCst);
-            println!(
-                "Dioxus user disconnected = {}",
-                ACTIVE_USERS.load(Ordering::Relaxed)
-            );
-        })
-    }
 
     async fn handle_tcp_socket(mut socket: WebSocket) {
-        // User connected
-        println!(
-            "User connected, active users = {}",
-            ACTIVE_USERS.load(Ordering::Relaxed) / 2
-        );
+        let current = ACTIVE_USERS.fetch_add(1, Ordering::SeqCst) + 1;
+        println!("User connected, active users = {}", current);
 
         let mut rx = TCP_BROADCAST.subscribe();
 
         loop {
             tokio::select! {
-                msg = rx.recv() => {
-                    if let Ok(message) = msg {
-                        if socket
-                            .send(axum::extract::ws::Message::Text(message.into()))
-                            .await
-                            .is_err()
-                        {
-                            break;
-                        }
-                    }
-                }
-
-                // Detect client disconnect
-                result = socket.recv() => {
-                    if result.is_none() {
+            msg = rx.recv() => {
+                if let Ok(message) = msg {
+                    if socket
+                        .send(axum::extract::ws::Message::Text(message.into()))
+                        .await
+                        .is_err()
+                    {
                         break;
                     }
                 }
             }
+
+            result = socket.recv() => {
+                if result.is_none() {
+                    break;
+                }
+            }
+        }
         }
 
-        // User disconnected
-        println!(
-            "User disconnected, active users = {}",
-            ACTIVE_USERS.load(Ordering::Relaxed)
-        );
+        let current = ACTIVE_USERS.fetch_sub(1, Ordering::SeqCst) - 1;
+        println!("User disconnected, active users = {}", current);
     }
 
     dotenv::dotenv().ok();
@@ -187,7 +163,7 @@ async fn main() {
                 let users = ACTIVE_USERS.load(Ordering::Relaxed);
 
                 let point = DataPoint::builder("voegeli")
-                    .field("visitors", (users / 2) as i64)
+                    .field("visitors", users as i64)
                     .build()
                     .unwrap();
 
@@ -209,11 +185,10 @@ async fn main() {
 
     let router = Router::new()
         .route("/voegeli", get(|| async { Redirect::temporary("/") }))
-        .route("/ws/tcp", get(tcp_websocket_handler)) // New endpoint
-        .route("/_dioxus/ws", get(dioxus_ws_counter))
-        .serve_dioxus_application(ServeConfig::default(), App)
+        .route("/ws/tcp", get(tcp_websocket_handler))
         .nest_service("/assets", ServeDir::new("public/assets"))
-        .nest_service("/gallery_cache", ServeDir::new("public/gallery_cache"));
+        .nest_service("/gallery_cache", ServeDir::new("public/gallery_cache"))
+        .serve_dioxus_application(ServeConfig::default(), App);
 
     let listener = tokio::net::TcpListener::bind(&addr).await.unwrap();
     axum::serve(listener, router.into_make_service())
