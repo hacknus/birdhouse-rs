@@ -85,13 +85,27 @@ async fn main() {
 
 
     async fn handle_tcp_socket(mut socket: WebSocket) {
-        let current = ACTIVE_USERS.fetch_add(1, Ordering::SeqCst) + 1;
-        println!("User connected, active users = {}", current);
+        ACTIVE_USERS.fetch_add(1, Ordering::SeqCst);
+        println!(
+            "User connected, active users = {}",
+            ACTIVE_USERS.load(Ordering::Relaxed)
+        );
 
         let mut rx = TCP_BROADCAST.subscribe();
+        let mut ping = interval(Duration::from_secs(20));
 
         loop {
             tokio::select! {
+            _ = ping.tick() => {
+                if socket
+                    .send(axum::extract::ws::Message::Ping(vec![].into()))
+                    .await
+                    .is_err()
+                {
+                    break;
+                }
+            }
+
             msg = rx.recv() => {
                 if let Ok(message) = msg {
                     if socket
@@ -112,8 +126,11 @@ async fn main() {
         }
         }
 
-        let current = ACTIVE_USERS.fetch_sub(1, Ordering::SeqCst) - 1;
-        println!("User disconnected, active users = {}", current);
+        ACTIVE_USERS.fetch_sub(1, Ordering::SeqCst);
+        println!(
+            "User disconnected, active users = {}",
+            ACTIVE_USERS.load(Ordering::Relaxed)
+        );
     }
 
     dotenv::dotenv().ok();

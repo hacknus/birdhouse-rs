@@ -78,6 +78,26 @@ impl TcpState {
             }
         }) as Box<dyn FnMut(_)>);
 
+        let mut ws_connected = self.ws_connected;
+
+        let on_close = Closure::wrap(Box::new(move |_| {
+            web_sys::console::warn_1(&"WebSocket closed, reconnecting…".into());
+            ws_connected.set(false);
+        }) as Box<dyn FnMut(web_sys::CloseEvent)>);
+
+        socket.set_onclose(Some(on_close.as_ref().unchecked_ref()));
+        on_close.forget();
+
+        let mut ws_connected = self.ws_connected;
+
+        let on_error = Closure::wrap(Box::new(move |_| {
+            web_sys::console::error_1(&"WebSocket error, reconnecting…".into());
+            ws_connected.set(false);
+        }) as Box<dyn FnMut(web_sys::Event)>);
+
+        socket.set_onerror(Some(on_error.as_ref().unchecked_ref()));
+        on_error.forget();
+
         socket.set_onmessage(Some(on_message.as_ref().unchecked_ref()));
         on_message.forget();
 

@@ -510,31 +510,37 @@ pub fn Home() -> Element {
                 // Temperature panel
                     // <iframe src="http://localhost:3000/d-solo/adv7pb5/voegeli?orgId=1&timezone=browser&refresh=5s&panelId=panel-7&__feature.dashboardSceneSolo=true" width="450" height="200" frameborder="0"></iframe>
                 iframe {
-                    src: format!("{}/d-solo/{}?orgId=1&timezone=browser&refresh=5s&panelId=panel-7&__feature.dashboardSceneSolo=true&from=now-6h&to=now", cfg.grafana_base_url, cfg.grafana_dashboard),
+                    src: format!("{}/d-solo/{}?orgId=1&timezone=browser&refresh=5s&panelId=panel-7&__feature.dashboardSceneSolo=true&from=now-24h&to=now", cfg.grafana_base_url, cfg.grafana_dashboard),
                     class: "w-full h-64 rounded-lg border-2 border-slate-700",
                 }
 
                 // Humidity panel
                 iframe {
-                    src: format!("{}/d-solo/{}?orgId=1&timezone=browser&refresh=5s&panelId=panel-8&__feature.dashboardSceneSolo=true&from=now-6h&to=now", cfg.grafana_base_url, cfg.grafana_dashboard),
+                    src: format!("{}/d-solo/{}?orgId=1&timezone=browser&refresh=5s&panelId=panel-8&__feature.dashboardSceneSolo=true&from=now-24h&to=now", cfg.grafana_base_url, cfg.grafana_dashboard),
                     class: "w-full h-64 rounded-lg border-2 border-slate-700",
                 }
 
                 // CO2 panel
                 iframe {
-                    src: format!("{}/d-solo/{}?orgId=1&timezone=browser&refresh=5s&panelId=panel-9&__feature.dashboardSceneSolo=true&from=now-6h&to=now", cfg.grafana_base_url, cfg.grafana_dashboard),
+                    src: format!("{}/d-solo/{}?orgId=1&timezone=browser&refresh=5s&panelId=panel-9&__feature.dashboardSceneSolo=true&from=now-24h&to=now", cfg.grafana_base_url, cfg.grafana_dashboard),
                     class: "w-full h-64 rounded-lg border-2 border-slate-700",
                 }
 
                 // Motion panel
                 iframe {
-                    src: format!("{}/d-solo/{}?orgId=1&timezone=browser&refresh=5s&panelId=panel-10&__feature.dashboardSceneSolo=true&from=now-6h&to=now", cfg.grafana_base_url, cfg.grafana_dashboard),
+                    src: format!("{}/d-solo/{}?orgId=1&timezone=browser&refresh=5s&panelId=panel-10&__feature.dashboardSceneSolo=true&from=now-24h&to=now", cfg.grafana_base_url, cfg.grafana_dashboard),
                     class: "w-full h-64 rounded-lg border-2 border-slate-700",
                 }
 
                 // Visitors panel
                 iframe {
-                    src: format!("{}/d-solo/{}?orgId=1&timezone=browser&refresh=5s&panelId=panel-11&__feature.dashboardSceneSolo=true&from=now-6h&to=now", cfg.grafana_base_url, cfg.grafana_dashboard),
+                    src: format!("{}/d-solo/{}?orgId=1&timezone=browser&refresh=5s&panelId=panel-12&__feature.dashboardSceneSolo=true&from=now-24h&to=now", cfg.grafana_base_url, cfg.grafana_dashboard),
+                    class: "w-full h-64 rounded-lg border-2 border-slate-700",
+                }
+
+                // Visitors panel
+                iframe {
+                    src: format!("{}/d-solo/{}?orgId=1&timezone=browser&refresh=5s&panelId=panel-11&__feature.dashboardSceneSolo=true&from=now-24h&to=now", cfg.grafana_base_url, cfg.grafana_dashboard),
                     class: "w-full h-64 rounded-lg border-2 border-slate-700",
                 }
             }
