@@ -1,11 +1,60 @@
 use dioxus::dioxus_core::Task;
 use dioxus::document::eval;
 use dioxus::prelude::*;
+#[cfg(feature = "server")]
+use std::collections::HashMap;
+#[cfg(feature = "server")]
+use std::sync::Arc;
+#[cfg(feature = "server")]
+use std::time::{SystemTime, UNIX_EPOCH};
+#[cfg(feature = "server")]
+use tokio::sync::Mutex;
 #[cfg(target_arch = "wasm32")]
 use wasm_bindgen::{closure::Closure, JsCast};
 #[cfg(target_arch = "wasm32")]
 use web_sys::{MessageEvent, WebSocket};
 
+const CAMERA_SVG: Asset = asset!("/assets/svg/camera.svg");
+
+#[cfg(feature = "server")]
+static IMAGE_SAVE_TRACKER: once_cell::sync::Lazy<Arc<Mutex<Vec<u64>>>> =
+    once_cell::sync::Lazy::new(|| Arc::new(Mutex::new(Vec::new())));
+#[server]
+async fn save_image_to_gallery() -> Result<String, ServerFnError> {
+    let now = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .unwrap()
+        .as_secs();
+    let one_hour_ago = now.saturating_sub(3600);
+
+    let mut tracker = IMAGE_SAVE_TRACKER.lock().await;
+
+    // Remove timestamps older than 1 hour
+    tracker.retain(|&ts| ts > one_hour_ago);
+
+    if tracker.len() >= 10 {
+        return Err(ServerFnError::new(
+            "Rate limit exceeded. Maximum 10 images per hour.",
+        ));
+    }
+
+    // Add current timestamp
+    tracker.push(now);
+
+    // Get the count before dropping the guard
+    let count = tracker.len();
+    drop(tracker);
+
+    // Send TCP command
+    tcp_client::send_command("[CMD] save image")
+        .await
+        .map_err(|e| ServerFnError::new(format!("Failed to save image: {}", e)))?;
+
+    Ok(format!(
+        "Image saved successfully. {} images saved in the last hour.",
+        count
+    ))
+}
 #[server]
 async fn get_stream_config() -> Result<StreamConfig, ServerFnError> {
     Ok(StreamConfig {
@@ -87,10 +136,10 @@ async fn is_admin() -> Result<bool, ServerFnError> {
 
 #[cfg(target_arch = "wasm32")]
 fn init_webgl_spectrogram(canvas_id: &str, ws_url: &str) -> Result<(), wasm_bindgen::JsValue> {
-    use web_sys::{HtmlCanvasElement, CanvasRenderingContext2d, ImageData};
-    use wasm_bindgen::JsCast;
-    use std::rc::Rc;
     use std::cell::RefCell;
+    use std::rc::Rc;
+    use wasm_bindgen::JsCast;
+    use web_sys::{CanvasRenderingContext2d, HtmlCanvasElement, ImageData};
 
     let document = web_sys::window().unwrap().document().unwrap();
     let canvas = document
@@ -144,7 +193,9 @@ fn init_webgl_spectrogram(canvas_id: &str, ws_url: &str) -> Result<(), wasm_bind
             let socket = match WebSocket::new(&ws_url) {
                 Ok(s) => s,
                 Err(e) => {
-                    web_sys::console::error_1(&format!("Failed to create WebSocket: {:?}", e).into());
+                    web_sys::console::error_1(
+                        &format!("Failed to create WebSocket: {:?}", e).into(),
+                    );
                     return;
                 }
             };
@@ -239,7 +290,7 @@ fn init_webgl_spectrogram(canvas_id: &str, ws_url: &str) -> Result<(), wasm_bind
             if let Ok(image_data) = ImageData::new_with_u8_clamped_array_and_sh(
                 wasm_bindgen::Clamped(&pixels),
                 1,
-                HEIGHT
+                HEIGHT,
             ) {
                 let _ = ctx_render.put_image_data(&image_data, (WIDTH - 1) as f64, 0.0);
             }
@@ -251,15 +302,25 @@ fn init_webgl_spectrogram(canvas_id: &str, ws_url: &str) -> Result<(), wasm_bind
 
         let window = web_sys::window().unwrap();
         let _ = window.set_timeout_with_callback_and_timeout_and_arguments_0(
-            render_loop_clone.borrow().as_ref().unwrap().as_ref().unchecked_ref(),
-            delay
+            render_loop_clone
+                .borrow()
+                .as_ref()
+                .unwrap()
+                .as_ref()
+                .unchecked_ref(),
+            delay,
         );
     }) as Box<dyn FnMut()>));
 
     let window = web_sys::window().unwrap();
     window.set_timeout_with_callback_and_timeout_and_arguments_0(
-        render_loop.borrow().as_ref().unwrap().as_ref().unchecked_ref(),
-        0
+        render_loop
+            .borrow()
+            .as_ref()
+            .unwrap()
+            .as_ref()
+            .unchecked_ref(),
+        0,
     )?;
 
     ctx.set_fill_style(&"black".into());
@@ -270,9 +331,6 @@ fn init_webgl_spectrogram(canvas_id: &str, ws_url: &str) -> Result<(), wasm_bind
 
 pub fn Home() -> Element {
     let mut config = use_resource(|| async move { get_stream_config().await.ok() });
-    let mut _ws_task = use_signal(|| None::<Task>);
-    let tcp_ws_task = use_signal(|| None::<Task>);
-
     let mut tcp_state = use_context::<tcp_state::TcpState>();
     let mut ir_enabled = tcp_state.ir_enabled;
     let mut ir_filter_enabled = tcp_state.ir_filter_enabled;
@@ -298,14 +356,18 @@ pub fn Home() -> Element {
     });
 
     #[cfg(target_arch = "wasm32")]
-    use_effect(move || {
-        if !*tcp_state.ws_connected.read() {
-            spawn(async move {
-                gloo_timers::future::sleep(std::time::Duration::from_millis(500)).await;
-                tcp_state.init_websocket();
-            });
-        }
-    });
+    {
+        let mut tcp_initialized = use_signal(|| false);
+        use_effect(move || {
+            if !tcp_initialized() && !*tcp_state.ws_connected.read() {
+                spawn(async move {
+                    gloo_timers::future::sleep(std::time::Duration::from_millis(500)).await;
+                    tcp_state.init_websocket();
+                });
+                tcp_initialized.set(true);
+            }
+        });
+    }
 
     let config_value = config.read();
     let Some(Some(cfg)) = config_value.as_ref() else {
@@ -322,157 +384,177 @@ pub fn Home() -> Element {
 
     #[cfg(target_arch = "wasm32")]
     {
-        let mut initialized = use_signal(|| false);
-        let ws_url_clone = ws_url.clone();  // Clone the websocket_url from config
+        let mut spec_initialized = use_signal(|| false);
+        let ws_url_clone = ws_url.clone();
 
         use_effect(move || {
-            if !initialized() {
+            if !spec_initialized() {
                 if let Err(e) = init_webgl_spectrogram("spectrogram", &ws_url_clone) {
-                    web_sys::console::error_1(&format!("Failed to init spectrogram: {:?}", e).into());
+                    web_sys::console::error_1(
+                        &format!("Failed to init spectrogram: {:?}", e).into(),
+                    );
                 }
-                initialized.set(true);
+                spec_initialized.set(true);
             }
         });
     }
 
-
     rsx! {
-            section {
-                class: "min-h-screen w-full flex flex-col items-center bg-slate-900 gap-6 py-4",
+        section {
+            class: "min-h-screen w-full flex flex-col items-center bg-slate-900 gap-6 py-4",
 
-                // Toggle switches container
+            div {
+                class: "w-full max-w-7xl flex flex-row flex-nowrap items-center justify-center gap-6 px-4 py-2 overflow-x-auto",
                 div {
-                    class: "w-full max-w-7xl flex flex-row flex-nowrap items-center justify-center gap-6 px-4 py-2 overflow-x-auto",
-                    div {
-                        class: "flex items-center gap-2",
-                        label {
-                            class: "text-white font-small whitespace-nowrap",
-                            "IR LED"
-                        }
-                        button {
+                    class: "flex items-center gap-2",
+                    label {
+                        class: "text-white font-small whitespace-nowrap",
+                        "IR LED"
+                    }
+                    button {
+                        class: format!(
+                            "relative inline-flex h-6 w-12 items-center rounded-full transition-colors {}",
+                            if ir_enabled() { "bg-blue-500" } else { "bg-gray-600" }
+                        ),
+                        onclick: move |_| {
+                            let new_state = !ir_enabled();
+                            spawn(async move {
+                                if let Ok(state) = toggle_ir_led(new_state).await {
+                                    ir_enabled.set(state);
+                                }
+                            });
+                        },
+                        span {
                             class: format!(
-                                "relative inline-flex h-6 w-12 items-center rounded-full transition-colors {}",
-                                if ir_enabled() { "bg-blue-500" } else { "bg-gray-600" }
-                            ),
-                            onclick: move |_| {
-                                let new_state = !ir_enabled();
+                                "inline-block h-4 w-4 transform rounded-full bg-white transition-transform {}",
+                                if ir_enabled() { "translate-x-7" } else { "translate-x-1" }
+                            )
+                        }
+                    }
+                }
+
+                div {
+                    class: "flex items-center gap-3",
+                    label {
+                        class: format!(
+                            "font-small whitespace-nowrap {}",
+                            if is_admin_user() { "text-white" } else { "text-gray-500" }
+                        ),
+                        "IR Filter"
+                    }
+                    button {
+                        class: format!(
+                            "relative inline-flex h-6 w-12 items-center rounded-full transition-colors {} {}",
+                            if ir_filter_enabled() {
+                                if is_admin_user() { "bg-blue-500" } else { "bg-gray-500" }
+                            } else {
+                                "bg-gray-600"
+                            },
+                            if !is_admin_user() { "opacity-50 cursor-not-allowed" } else { "cursor-pointer" }
+                        ),
+                        disabled: !is_admin_user(),
+                        onclick: move |_| {
+                            if is_admin_user() {
+                                let new_state = !ir_filter_enabled();
                                 spawn(async move {
-                                    if let Ok(state) = toggle_ir_led(new_state).await {
-                                        ir_enabled.set(state);
+                                    if let Ok(state) = toggle_ir_filter(new_state).await {
+                                        ir_filter_enabled.set(state);
                                     }
                                 });
-                            },
-                            span {
-                                class: format!(
-                                    "inline-block h-4 w-4 transform rounded-full bg-white transition-transform {}",
-                                    if ir_enabled() { "translate-x-7" } else { "translate-x-1" }
-                                )
                             }
-                        }
-                    }
-
-                    div {
-                        class: "flex items-center gap-3",
-                        label {
+                        },
+                        span {
                             class: format!(
-                                "font-small whitespace-nowrap {}",
-                                if is_admin_user() { "text-white" } else { "text-gray-500" }
-                            ),
-                            "IR Filter"
-                        }
-                        button {
-                            class: format!(
-                                "relative inline-flex h-6 w-12 items-center rounded-full transition-colors {} {}",
-                                if ir_filter_enabled() {
-                                    if is_admin_user() { "bg-blue-500" } else { "bg-gray-500" }
-                                } else {
-                                    "bg-gray-600"
-                                },
-                                if !is_admin_user() { "opacity-50 cursor-not-allowed" } else { "cursor-pointer" }
-                            ),
-                            disabled: !is_admin_user(),
-                            onclick: move |_| {
-                                if is_admin_user() {
-                                    let new_state = !ir_filter_enabled();
-                                    spawn(async move {
-                                        if let Ok(state) = toggle_ir_filter(new_state).await {
-                                            ir_filter_enabled.set(state);
-                                        }
-                                    });
-                                }
-                            },
-                            span {
-                                class: format!(
-                                    "inline-block h-4 w-4 transform rounded-full bg-white transition-transform {}",
-                                    if ir_filter_enabled() { "translate-x-7" } else { "translate-x-1" }
-                                )
-                            }
+                                "inline-block h-4 w-4 transform rounded-full bg-white transition-transform {}",
+                                if ir_filter_enabled() { "translate-x-7" } else { "translate-x-1" }
+                            )
                         }
                     }
                 }
-
-
                 div {
-                    class: "w-full flex flex-col items-center gap-6 px-4",
-                    style: "--content-width: min(100%, 1280px); --stream-height: calc(var(--content-width) * 9 / 16); --spec-height: calc(var(--content-width) * 4 / 16);",
-                    iframe {
-                        src: stream_url,
-                        style: format!(
-                            "height: var(--stream-height); aspect-ratio: 16 / 9; width: var(--content-width); {}",
-                             "" // if !ir_filter_enabled() { "filter: grayscale(100%);" } else { "" }
+                    class: "flex items-center gap-4",
+                    label {
+                        class: format!(
+                            "font-small whitespace-nowrap {}",
+                            if is_admin_user() { "text-white" } else { "text-gray-500" }
                         ),
-                        class: "rounded-lg bg-gray-800 shadow-lg",
-                        allow: "camera;autoplay;encrypted-media",
-                        allowfullscreen: true,
+                        "Save Image"
                     }
-                    canvas {
-                        id: "spectrogram",
-                        style: "height: var(--spec-height); aspect-ratio: 16 / 4; width: var(--content-width);",
-                        class: "rounded-lg bg-black shadow-lg",
+
+                    button {
+                        class: "px-3 py-0.5 rounded-lg bg-blue-500 hover:bg-blue-600 active:bg-blue-700 transition-colors disabled:opacity-50 disabled:cursor-not-allowed",                        onclick: move |_| {
+                            spawn(async move {
+                                match save_image_to_gallery().await {
+                                    Ok(msg) => {
+                                        #[cfg(target_arch = "wasm32")]
+                                        web_sys::console::log_1(&msg.into());
+                                    }
+                                    Err(e) => {
+                                        #[cfg(target_arch = "wasm32")]
+                                        web_sys::console::error_1(&format!("Error: {}", e).into());
+                                    }
+                                }
+                            });
+                        },
+                        img {
+                            src: CAMERA_SVG,
+                            class: "w-6 h-6",
+                            alt: "Save image"
+                        }
                     }
                 }
+            }
 
-            // Grafana panels grid
+            div {
+                class: "w-full flex flex-col items-center gap-6 px-4",
+                style: "--content-width: min(100%, 1280px); --stream-height: calc(var(--content-width) * 9 / 16); --spec-height: calc(var(--content-width) * 4 / 16);",
+                iframe {
+                    src: stream_url,
+                    style: "height: var(--stream-height); aspect-ratio: 16 / 9; width: var(--content-width);",
+                    class: "rounded-lg bg-gray-800 shadow-lg",
+                    allow: "camera;autoplay;encrypted-media",
+                    allowfullscreen: true,
+                }
+                canvas {
+                    id: "spectrogram",
+                    style: "height: var(--spec-height); aspect-ratio: 16 / 4; width: var(--content-width);",
+                    class: "rounded-lg bg-black shadow-lg",
+                }
+            }
+
             div {
                 class: "w-full max-w-7xl grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4",
 
-                // Temperature panel
-                    // <iframe src="http://localhost:3000/d-solo/adv7pb5/voegeli?orgId=1&timezone=browser&refresh=5s&panelId=panel-7&__feature.dashboardSceneSolo=true" width="450" height="200" frameborder="0"></iframe>
                 iframe {
                     src: format!("{}/d-solo/{}?orgId=1&timezone=browser&refresh=5s&panelId=panel-7&__feature.dashboardSceneSolo=true&from=now-24h&to=now", cfg.grafana_base_url, cfg.grafana_dashboard),
                     class: "w-full h-64 rounded-lg border-2 border-slate-700",
                 }
 
-                // Humidity panel
                 iframe {
                     src: format!("{}/d-solo/{}?orgId=1&timezone=browser&refresh=5s&panelId=panel-8&__feature.dashboardSceneSolo=true&from=now-24h&to=now", cfg.grafana_base_url, cfg.grafana_dashboard),
                     class: "w-full h-64 rounded-lg border-2 border-slate-700",
                 }
 
-                // CO2 panel
                 iframe {
                     src: format!("{}/d-solo/{}?orgId=1&timezone=browser&refresh=5s&panelId=panel-9&__feature.dashboardSceneSolo=true&from=now-24h&to=now", cfg.grafana_base_url, cfg.grafana_dashboard),
                     class: "w-full h-64 rounded-lg border-2 border-slate-700",
                 }
 
-                // Motion panel
                 iframe {
                     src: format!("{}/d-solo/{}?orgId=1&timezone=browser&refresh=5s&panelId=panel-10&__feature.dashboardSceneSolo=true&from=now-24h&to=now", cfg.grafana_base_url, cfg.grafana_dashboard),
                     class: "w-full h-64 rounded-lg border-2 border-slate-700",
                 }
 
-                // Visitors panel
                 iframe {
                     src: format!("{}/d-solo/{}?orgId=1&timezone=browser&refresh=5s&panelId=panel-12&__feature.dashboardSceneSolo=true&from=now-24h&to=now", cfg.grafana_base_url, cfg.grafana_dashboard),
                     class: "w-full h-64 rounded-lg border-2 border-slate-700",
                 }
 
-                // Visitors panel
                 iframe {
                     src: format!("{}/d-solo/{}?orgId=1&timezone=browser&refresh=5s&panelId=panel-11&__feature.dashboardSceneSolo=true&from=now-24h&to=now", cfg.grafana_base_url, cfg.grafana_dashboard),
                     class: "w-full h-64 rounded-lg border-2 border-slate-700",
                 }
             }
-            }
+        }
     }
 }
