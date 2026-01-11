@@ -85,6 +85,153 @@ async fn is_admin() -> Result<bool, ServerFnError> {
     Ok(false)
 }
 
+#[cfg(target_arch = "wasm32")]
+fn init_webgl_spectrogram(canvas_id: &str, ws_url: &str) -> Result<(), wasm_bindgen::JsValue> {
+    use web_sys::{HtmlCanvasElement, CanvasRenderingContext2d, ImageData};
+    use wasm_bindgen::JsCast;
+    use std::rc::Rc;
+    use std::cell::RefCell;
+
+    let document = web_sys::window().unwrap().document().unwrap();
+    let canvas = document
+        .get_element_by_id(canvas_id)
+        .ok_or("Canvas not found")?
+        .dyn_into::<HtmlCanvasElement>()?;
+
+    let ctx = canvas
+        .get_context("2d")?
+        .ok_or("2D context not supported")?
+        .dyn_into::<CanvasRenderingContext2d>()?;
+
+    const HEIGHT: u32 = 256;
+    const SECONDS: u32 = 20;
+    const FPS: u32 = 30;
+    const WIDTH: u32 = SECONDS * FPS;
+
+    canvas.set_width(WIDTH);
+    canvas.set_height(HEIGHT);
+
+    const SAMPLE_RATE: f64 = 44100.0;
+    const FFT_SIZE: usize = 1024;
+    const FREQ_MIN: f64 = 200.0;
+    const FREQ_MAX: f64 = 12000.0;
+
+    let mut log_freq_map = vec![0usize; HEIGHT as usize];
+    for y in 0..HEIGHT {
+        let frac = y as f64 / HEIGHT as f64;
+        let freq = FREQ_MIN * (FREQ_MAX / FREQ_MIN).powf(frac);
+        let bin = (freq * FFT_SIZE as f64 / SAMPLE_RATE).round() as usize;
+        log_freq_map[(HEIGHT - 1 - y) as usize] = bin.min(FFT_SIZE / 2 - 1);
+    }
+
+    let log_freq_map = Rc::new(log_freq_map);
+    let socket = WebSocket::new(ws_url)?;
+    let frame_buffer = Rc::new(RefCell::new(Vec::<Vec<f64>>::new()));
+    let frame_buffer_clone = frame_buffer.clone();
+
+    let last_data_time = Rc::new(RefCell::new(js_sys::Date::now()));
+    let last_data_clone = last_data_time.clone();
+
+    let on_message = Closure::wrap(Box::new(move |event: MessageEvent| {
+        if let Some(text) = event.data().as_string() {
+            if let Ok(fft) = serde_json::from_str::<Vec<f64>>(&text) {
+                let mut buffer = frame_buffer_clone.borrow_mut();
+                if buffer.len() < 10 {
+                    buffer.push(fft);
+                }
+                *last_data_clone.borrow_mut() = js_sys::Date::now();
+            }
+        }
+    }) as Box<dyn FnMut(_)>);
+
+    socket.set_onmessage(Some(on_message.as_ref().unchecked_ref()));
+    on_message.forget();
+
+    let ctx_render = ctx.clone();
+    let canvas_render = canvas.clone();
+    let log_freq_map_render = log_freq_map.clone();
+
+    // Pre-allocate pixel buffer outside render loop
+    let pixel_buffer = Rc::new(RefCell::new(vec![0u8; HEIGHT as usize * 4]));
+
+    let render_loop = Rc::new(RefCell::new(None::<Closure<dyn FnMut()>>));
+    let render_loop_clone = render_loop.clone();
+
+    *render_loop.borrow_mut() = Some(Closure::wrap(Box::new(move || {
+        // Early exit if no data to render
+        if frame_buffer.borrow().is_empty() {
+            let window = web_sys::window().unwrap();
+            let _ = window.set_timeout_with_callback_and_timeout_and_arguments_0(
+                render_loop_clone.borrow().as_ref().unwrap().as_ref().unchecked_ref(),
+                16  // Check again in 16ms
+            );
+            return;
+        }
+
+        if let Some(fft) = frame_buffer.borrow_mut().pop() {
+            // Shift canvas left by 1 pixel
+            let _ = ctx_render.draw_image_with_html_canvas_element(
+                &canvas_render,
+                -1.0,
+                0.0
+            );
+
+            // Reuse pre-allocated pixel buffer
+            let mut pixels = pixel_buffer.borrow_mut();
+            for y in 0..HEIGHT as usize {
+                let bin = log_freq_map_render[y];
+                let v = fft.get(bin).copied().unwrap_or(0.0);
+                let norm = ((v + 6.0) / 6.0).clamp(0.0, 1.0);
+                let c = (norm * 255.0) as u8;
+
+                let idx = y * 4;
+                pixels[idx] = c;
+                pixels[idx + 1] = (c as f64 * 0.6) as u8;
+                pixels[idx + 2] = 255;
+                pixels[idx + 3] = 255;
+            }
+
+            if let Ok(image_data) = ImageData::new_with_u8_clamped_array_and_sh(
+                wasm_bindgen::Clamped(&pixels),
+                1,
+                HEIGHT
+            ) {
+                let _ = ctx_render.put_image_data(&image_data, (WIDTH - 1) as f64, 0.0);
+            }
+        }
+
+        // Use setTimeout instead of rAF to control frame rate precisely
+        let window = web_sys::window().unwrap();
+        let _ = window.set_timeout_with_callback_and_timeout_and_arguments_0(
+            render_loop_clone.borrow().as_ref().unwrap().as_ref().unchecked_ref(),
+            33  // 30 FPS
+        );
+    }) as Box<dyn FnMut()>));
+
+    let window = web_sys::window().unwrap();
+    window.set_timeout_with_callback_and_timeout_and_arguments_0(
+        render_loop.borrow().as_ref().unwrap().as_ref().unchecked_ref(),
+        0
+    )?;
+
+    let on_open = Closure::wrap(Box::new(move |_: web_sys::Event| {
+        web_sys::console::log_1(&"Spectrogram WebSocket connected".into());
+    }) as Box<dyn FnMut(web_sys::Event)>);
+    socket.set_onopen(Some(on_open.as_ref().unchecked_ref()));
+    on_open.forget();
+
+    let on_error = Closure::wrap(Box::new(move |e: web_sys::ErrorEvent| {
+        web_sys::console::error_1(&format!("Spectrogram WebSocket error: {:?}", e).into());
+    }) as Box<dyn FnMut(web_sys::ErrorEvent)>);
+    socket.set_onerror(Some(on_error.as_ref().unchecked_ref()));
+    on_error.forget();
+
+    ctx.set_fill_style(&"black".into());
+    ctx.fill_rect(0.0, 0.0, WIDTH as f64, HEIGHT as f64);
+
+    Ok(())
+}
+
 pub fn Home() -> Element {
     let mut config = use_resource(|| async move { get_stream_config().await.ok() });
     let mut _ws_task = use_signal(|| None::<Task>);
@@ -153,238 +300,20 @@ pub fn Home() -> Element {
     let ws_url = cfg.websocket_url.clone();
 
     #[cfg(target_arch = "wasm32")]
-    let tcp_ws_handle = use_signal(|| None::<WebSocket>);
+    {
+        let mut initialized = use_signal(|| false);
+        let ws_url_clone = ws_url.clone();  // Clone the websocket_url from config
 
-    // In home.rs, add logging to debug WebSocket connection
-    // #[cfg(target_arch = "wasm32")]
-    // {
-    //     let mut ws_store = tcp_ws_handle.clone();
-    //     let mut ir_enabled_signal = ir_enabled.clone();
-    //     let mut ir_filter_signal = ir_filter_enabled.clone();
-    //
-    //     use_effect(move || {
-    //         if ws_store.read().is_some() {
-    //             return;
-    //         }
-    //
-    //         let window = web_sys::window().expect("browser window");
-    //         let protocol = window
-    //             .location()
-    //             .protocol()
-    //             .unwrap_or_else(|_| "http:".into());
-    //         let host = window
-    //             .location()
-    //             .host()
-    //             .unwrap_or_else(|_| "127.0.0.1:8080".into());
-    //
-    //         // Use wss:// if the page is served over https://
-    //         let ws_protocol = if protocol == "https:" { "wss" } else { "ws" };
-    //         let ws_url = format!("{}://{}/ws/tcp", ws_protocol, host);
-    //
-    //         web_sys::console::log_1(&format!("Connecting to: {}", ws_url).into());
-    //
-    //         let socket = WebSocket::new(&ws_url).expect("open TCP websocket");
-    //
-    //         let on_open = Closure::wrap(Box::new(move |_: web_sys::Event| {
-    //             web_sys::console::log_1(&"WebSocket connected!".into());
-    //         }) as Box<dyn FnMut(web_sys::Event)>);
-    //         socket.set_onopen(Some(on_open.as_ref().unchecked_ref()));
-    //         on_open.forget();
-    //
-    //         let on_error = Closure::wrap(Box::new(move |e: web_sys::ErrorEvent| {
-    //             web_sys::console::error_1(&format!("WebSocket error: {:?}", e).into());
-    //         }) as Box<dyn FnMut(web_sys::ErrorEvent)>);
-    //         socket.set_onerror(Some(on_error.as_ref().unchecked_ref()));
-    //         on_error.forget();
-    //
-    //         let on_message = {
-    //             let mut ir_enabled_signal = ir_enabled_signal.clone();
-    //             let mut ir_filter_signal = ir_filter_signal.clone();
-    //             Closure::wrap(Box::new(move |event: MessageEvent| {
-    //                 if let Some(text) = event.data().as_string() {
-    //                     let payload = text.to_uppercase();
-    //                     match () {
-    //                         _ if payload.contains("IR LED STATE: ON")
-    //                             || payload.contains("IR STATE IS ON")
-    //                             || payload.contains("IR ON") =>
-    //                         {
-    //                             ir_enabled_signal.set(true);
-    //                         }
-    //                         _ if payload.contains("IR LED STATE: OFF")
-    //                             || payload.contains("IR STATE IS OFF")
-    //                             || payload.contains("IR OFF") =>
-    //                         {
-    //                             ir_enabled_signal.set(false);
-    //                         }
-    //                         _ if payload.contains("IR FILTER STATE: ON")
-    //                             || payload.contains("IR FILTER STATE IS ON")
-    //                             || payload.contains("IR FILTER ON") =>
-    //                         {
-    //                             ir_filter_signal.set(true);
-    //                         }
-    //                         _ if payload.contains("IR FILTER STATE: OFF")
-    //                             || payload.contains("IR FILTER STATE IS OFF")
-    //                             || payload.contains("IR FILTER OFF") =>
-    //                         {
-    //                             ir_filter_signal.set(false);
-    //                         }
-    //                         _ => {}
-    //                     }
-    //                 }
-    //             }) as Box<dyn FnMut(_)>)
-    //         };
-    //
-    //         socket.set_onmessage(Some(on_message.as_ref().unchecked_ref()));
-    //         on_message.forget();
-    //
-    //         ws_store.set(Some(socket));
-    //     });
-    // }
-
-    use_effect(move || {
-        let ws_url = ws_url.clone();
-        let task = spawn(async move {
-            let script = format!(
-                r#"
-                const canvas = document.getElementById("spec");
-                const gl = canvas.getContext("webgl", {{
-                    alpha: false,
-                    antialias: false,
-                    depth: false,
-                    stencil: false,
-                    preserveDrawingBuffer: true,
-                    powerPreference: "low-power"
-                }});
-
-                if (!gl) {{
-                    console.error("WebGL not supported");
-                    return;
-                }}
-
-                const HEIGHT = 256;
-                const SECONDS = 15;
-                const FPS = 30;
-                const WIDTH = SECONDS * FPS;
-
-                canvas.width = WIDTH;
-                canvas.height = HEIGHT;
-                gl.viewport(0, 0, WIDTH, HEIGHT);
-
-                const texture = gl.createTexture();
-                gl.bindTexture(gl.TEXTURE_2D, texture);
-                gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_S, gl.CLAMP_TO_EDGE);
-                gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_T, gl.CLAMP_TO_EDGE);
-                gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, gl.NEAREST);
-                gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MAG_FILTER, gl.NEAREST);
-
-                const pixels = new Uint8Array(WIDTH * HEIGHT * 4);
-                gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA, WIDTH, HEIGHT, 0, gl.RGBA, gl.UNSIGNED_BYTE, pixels);
-
-                const vertexShader = gl.createShader(gl.VERTEX_SHADER);
-                gl.shaderSource(vertexShader, `
-                    attribute vec2 position;
-                    varying vec2 texCoord;
-                    void main() {{
-                        texCoord = position * 0.5 + 0.5;
-                        texCoord.y = 1.0 - texCoord.y;
-                        gl_Position = vec4(position, 0.0, 1.0);
-                    }}
-                `);
-                gl.compileShader(vertexShader);
-
-                const fragmentShader = gl.createShader(gl.FRAGMENT_SHADER);
-                gl.shaderSource(fragmentShader, `
-                    precision mediump float;
-                    uniform sampler2D tex;
-                    uniform float offset;
-                    varying vec2 texCoord;
-                    void main() {{
-                        vec2 coord = texCoord;
-                        coord.x = mod(coord.x + offset, 1.0);
-                        gl_FragColor = texture2D(tex, coord);
-                    }}
-                `);
-                gl.compileShader(fragmentShader);
-
-                const program = gl.createProgram();
-                gl.attachShader(program, vertexShader);
-                gl.attachShader(program, fragmentShader);
-                gl.linkProgram(program);
-                gl.useProgram(program);
-
-                const positionBuffer = gl.createBuffer();
-                gl.bindBuffer(gl.ARRAY_BUFFER, positionBuffer);
-                gl.bufferData(gl.ARRAY_BUFFER, new Float32Array([-1,-1, 1,-1, -1,1, 1,1]), gl.STATIC_DRAW);
-
-                const positionLoc = gl.getAttribLocation(program, "position");
-                gl.enableVertexAttribArray(positionLoc);
-                gl.vertexAttribPointer(positionLoc, 2, gl.FLOAT, false, 0, 0);
-
-                const offsetLoc = gl.getUniformLocation(program, "offset");
-                let scrollOffset = 0;
-
-                const FREQ_MIN = 200;
-                const FREQ_MAX = 12000;
-                const SAMPLE_RATE = 44100;
-                const FFT_SIZE = 1024;
-
-                const logFreqMap = new Array(HEIGHT);
-                for (let y = 0; y < HEIGHT; y++) {{
-                    const frac = y / HEIGHT;
-                    const freq = FREQ_MIN * Math.pow(FREQ_MAX / FREQ_MIN, frac);
-                    const bin = Math.round(freq * FFT_SIZE / SAMPLE_RATE);
-                    logFreqMap[HEIGHT - 1 - y] = Math.min(bin, FFT_SIZE / 2 - 1);
-                }}
-
-                let lastRenderTime = 0;
-                const MIN_FRAME_TIME = 1000 / FPS;
-
-                const ws = new WebSocket('{ws_url}');
-                ws.onopen = () => console.log("WebSocket connected");
-                ws.onerror = (err) => console.error("WebSocket error:", err);
-
-                ws.onmessage = (event) => {{
-                    const now = performance.now();
-                    if (now - lastRenderTime < MIN_FRAME_TIME) {{
-                        return;
-                    }}
-                    lastRenderTime = now;
-
-                    const fftData = JSON.parse(event.data);
-
-                    const column = new Uint8Array(HEIGHT * 4);
-                    for (let y = 0; y < HEIGHT; y++) {{
-                        const v = fftData[logFreqMap[y]];
-                        const norm = Math.max(0, Math.min(1, (v + 6) / 6));
-                        const c = Math.floor(norm * 255);
-                        column[y * 4] = c;
-                        column[y * 4 + 1] = Math.floor(c * 0.6);
-                        column[y * 4 + 2] = 255;
-                        column[y * 4 + 3] = 255;
-                    }}
-
-                    const x = Math.floor(scrollOffset * WIDTH);
-                    gl.texSubImage2D(gl.TEXTURE_2D, 0, x, 0, 1, HEIGHT, gl.RGBA, gl.UNSIGNED_BYTE, column);
-
-                    scrollOffset = (scrollOffset + 1 / WIDTH) % 1;
-
-                    gl.clearColor(0, 0, 0, 1);
-                    gl.clear(gl.COLOR_BUFFER_BIT);
-                    gl.uniform1f(offsetLoc, scrollOffset);
-                    gl.drawArrays(gl.TRIANGLE_STRIP, 0, 4);
-                }};
-
-                gl.clearColor(0, 0, 0, 1);
-                gl.clear(gl.COLOR_BUFFER_BIT);
-                gl.uniform1f(offsetLoc, 0);
-                gl.drawArrays(gl.TRIANGLE_STRIP, 0, 4);
-            "#
-            );
-
-            eval(&script);
+        use_effect(move || {
+            if !initialized() {
+                if let Err(e) = init_webgl_spectrogram("spectrogram", &ws_url_clone) {
+                    web_sys::console::error_1(&format!("Failed to init spectrogram: {:?}", e).into());
+                }
+                initialized.set(true);
+            }
         });
-        _ws_task.set(Some(task));
-    });
+    }
+
 
     rsx! {
             section {
@@ -476,7 +405,7 @@ pub fn Home() -> Element {
                         allowfullscreen: true,
                     }
                     canvas {
-                        id: "spec",
+                        id: "spectrogram",
                         style: "height: var(--spec-height); aspect-ratio: 16 / 4; width: var(--content-width);",
                         class: "rounded-lg bg-black shadow-lg",
                     }

@@ -241,6 +241,7 @@ dependencies = [
  "http 1.4.0",
  "influxdb",
  "influxdb2",
+ "js-sys",
  "once_cell",
  "rand",
  "serde",
