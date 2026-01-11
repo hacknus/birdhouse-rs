@@ -32,6 +32,7 @@ RUN apt-get update && apt-get install -y ca-certificates && rm -rf /var/lib/apt/
 
 # Copy artifacts
 COPY --from=builder /app/target/release/birdhouse-rs ./server
+COPY --from=builder /app/dist ./dist
 COPY --from=builder /app/target/dx/birdhouse-rs/release/web/public ./public
 
 ENV PORT=8080

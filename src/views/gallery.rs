@@ -133,19 +133,25 @@ fn ImageViewer(
         }
     };
 
-    let handle_touchend = move |evt: TouchEvent| {
-        if let Some(touch) = evt.data().target_touches().first() {
-            let end_x = touch.page_coordinates().x as f64;
-            let end_y = touch.page_coordinates().y as f64;
-            let diff_x = end_x - touch_start_x();
-            let diff_y = end_y - touch_start_y();
+    let mut touch_end_x = use_signal(|| 0.0);
+    let mut touch_end_y = use_signal(|| 0.0);
 
-            if diff_x.abs() > diff_y.abs() && diff_x.abs() > 50.0 {
-                if diff_x > 0.0 {
-                    on_prev.call(());
-                } else {
-                    on_next.call(());
-                }
+    let handle_touchmove = move |evt: TouchEvent| {
+        if let Some(touch) = evt.data().touches_changed().first() {
+            touch_end_x.set(touch.page_coordinates().x as f64);
+            touch_end_y.set(touch.page_coordinates().y as f64);
+        }
+    };
+
+    let handle_touchend = move |_evt: TouchEvent| {
+        let diff_x = touch_end_x() - touch_start_x();
+        let diff_y = touch_end_y() - touch_start_y();
+
+        if diff_x.abs() > diff_y.abs() && diff_x.abs() > 50.0 {
+            if diff_x > 0.0 {
+                on_prev.call(());
+            } else {
+                on_next.call(());
             }
         }
     };

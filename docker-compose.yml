@@ -8,3 +8,7 @@ services:
     volumes:
       - ./public/gallery_cache:/app/public/gallery_cache
     restart: unless-stopped
+
+volumes:
+  gallery_cache:
+    driver: local
