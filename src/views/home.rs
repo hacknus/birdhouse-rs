@@ -398,7 +398,7 @@ pub fn Home() -> Element {
                         src: stream_url,
                         style: format!(
                             "height: var(--stream-height); aspect-ratio: 16 / 9; width: var(--content-width); {}",
-                            if !ir_filter_enabled() { "filter: grayscale(100%);" } else { "" }
+                             "" // if !ir_filter_enabled() { "filter: grayscale(100%);" } else { "" }
                         ),
                         class: "rounded-lg bg-gray-800 shadow-lg",
                         allow: "camera;autoplay;encrypted-media",
