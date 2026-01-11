@@ -3,67 +3,87 @@ use dioxus::prelude::*;
 pub fn MakingOf() -> Element {
     rsx! {
         style {
-            "
+            r#"
             .making-of-section {{
-                max-width: 1200px;
-                margin: 0 auto;
-                padding: 60px 20px;
+                min-height: 1200px;
+                background-color: #0b0b0f;
+                padding: 4rem 2rem;
             }}
+
             .making-of-title {{
                 font-size: 3rem;
                 font-weight: 600;
                 text-align: center;
-                margin-bottom: 1rem;
-                color: #1d1d1f;
+                margin-bottom: 4rem;
+                color: #f5f5f7;
+                letter-spacing: -0.02em;
             }}
+
             .making-of-subtitle {{
-                font-size: 1.25rem;
+                gap: 3rem 2rem;
+                max-width: 1200px;
+                margin: 0 auto;
                 text-align: center;
-                color: #6e6e73;
-                max-width: 800px;
-                margin: 0 auto 60px;
-                line-height: 1.5;
+                margin-bottom: 4rem;
+                color: #f5f5f7;
             }}
+
             .making-of-grid {{
                 display: grid;
-                grid-template-columns: repeat(auto-fit, minmax(300px, 1fr));
-                gap: 40px;
-                margin-bottom: 60px;
+                grid-template-columns: repeat(auto-fill, minmax(280px, 1fr));
+                gap: 3rem 2rem;
+                max-width: 1200px;
+                margin: 0 auto;
             }}
+
             .making-of-item {{
-                text-align: center;
+                display: flex;
+                flex-direction: column;
+                gap: 1rem;
             }}
+
+            .making-of-image-wrap {{
+              width: 100%;
+              aspect-ratio: 4 / 3;   /* pick what you want your cards to be */
+              overflow: hidden;      /* hide corners when rotated/cropped */
+            }}
+
             .making-of-image {{
-                width: 100%;
-                height: auto;
-                border-radius: 12px;
-                margin-bottom: 20px;
+              width: 100%;
+              height: 100%;
+              object-fit: cover;     /* use contain if you don’t want cropping */
+              display: block;
+              transform-origin: center;
             }}
-            .making-of-image.rotated {{
-                transform: rotate(90deg);
-                max-width: 80%;
-                margin-left: auto;
-                margin-right: auto;
-            }}
+
+            /* pick ONE of these depending on what fixes it */
+            .rotate-fix {{ transform: rotate(90deg); }}
+
             .making-of-caption {{
-                font-size: 1.1rem;
-                font-weight: 600;
-                color: #1d1d1f;
-                margin-bottom: 8px;
+                font-size: 17px;
+                font-weight: 500;
+                color: #f5f5f7;
+                letter-spacing: -0.01em;
             }}
+
             .making-of-description {{
-                font-size: 0.95rem;
-                color: #6e6e73;
-                line-height: 1.5;
+                font-size: 15px;
+                font-weight: 300;
+                color: rgba(255, 255, 255, 0.70);
+                letter-spacing: -0.016em;
+                line-height: 1.4;
             }}
-            .making-of-description a {{
-                color: #0071e3;
-                text-decoration: none;
+
+            @media (max-width: 768px) {{
+                .making-of-grid {{
+                    grid-template-columns: 1fr;
+                    gap: 3rem;
+                }}
             }}
-            .making-of-description a:hover {{
-                text-decoration: underline;
-            }}
-            "
+
+
+
+            "#
         }
 
         div { class: "making-of-section",
@@ -100,14 +120,18 @@ pub fn MakingOf() -> Element {
 
                 // Step 4
                 div { class: "making-of-item",
-                    img { class: "making-of-image rotated", src: "/mounting.jpg", alt: "Mounting Outside" }
+                    div { class: "making-of-image-wrap",
+                        img { class: "making-of-image rotate-fix", src: "/mounting.jpg", alt: "Mounting Outside" }
+                    }
                     div { class: "making-of-caption", "Mounting Outside" }
                     div { class: "making-of-description", "The Birdhouse was then mounted outside with space-grade zip-ties. Power and LAN are passed through thin cables from the office." }
                 }
 
                 // Step 5
                 div { class: "making-of-item",
-                    img { class: "making-of-image rotated", src: "/final.jpg", alt: "Final Birdhouse" }
+                    div { class: "making-of-image-wrap",
+                        img { class: "making-of-image rotate-fix", src: "/final.jpg", alt: "Final Birdhouse" }
+                    }
                     div { class: "making-of-caption", "Birdhouse" }
                     div { class: "making-of-description", "The birdhouse is shining in all its glory and ready for check in!" }
                 }

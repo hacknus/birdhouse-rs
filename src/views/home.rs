@@ -433,56 +433,53 @@ pub fn Home() -> Element {
                     }
                 }
 
-                div {
-                    class: "flex items-center gap-3",
-                    label {
-                        class: format!(
-                            "font-small whitespace-nowrap {}",
-                            if is_admin_user() { "text-white" } else { "text-gray-500" }
-                        ),
-                        "IR Filter"
-                    }
-                    button {
-                        class: format!(
-                            "relative inline-flex h-6 w-12 items-center rounded-full transition-colors {} {}",
-                            if ir_filter_enabled() {
-                                if is_admin_user() { "bg-blue-500" } else { "bg-gray-500" }
-                            } else {
-                                "bg-gray-600"
-                            },
-                            if !is_admin_user() { "opacity-50 cursor-not-allowed" } else { "cursor-pointer" }
-                        ),
-                        disabled: !is_admin_user(),
-                        onclick: move |_| {
-                            if is_admin_user() {
-                                let new_state = !ir_filter_enabled();
-                                spawn(async move {
-                                    if let Ok(state) = toggle_ir_filter(new_state).await {
-                                        ir_filter_enabled.set(state);
-                                    }
-                                });
-                            }
-                        },
-                        span {
-                            class: format!(
-                                "inline-block h-4 w-4 transform rounded-full bg-white transition-transform {}",
-                                if ir_filter_enabled() { "translate-x-7" } else { "translate-x-1" }
-                            )
-                        }
-                    }
-                }
+                // div {
+                //     class: "flex items-center gap-3",
+                //     label {
+                //         class: format!(
+                //             "font-small whitespace-nowrap {}",
+                //             if is_admin_user() { "text-white" } else { "text-gray-500" }
+                //         ),
+                //         "IR Filter"
+                //     }
+                //     button {
+                //         class: format!(
+                //             "relative inline-flex h-6 w-12 items-center rounded-full transition-colors {} {}",
+                //             if ir_filter_enabled() {
+                //                 if is_admin_user() { "bg-blue-500" } else { "bg-gray-500" }
+                //             } else {
+                //                 "bg-gray-600"
+                //             },
+                //             if !is_admin_user() { "opacity-50 cursor-not-allowed" } else { "cursor-pointer" }
+                //         ),
+                //         disabled: !is_admin_user(),
+                //         onclick: move |_| {
+                //             if is_admin_user() {
+                //                 let new_state = !ir_filter_enabled();
+                //                 spawn(async move {
+                //                     if let Ok(state) = toggle_ir_filter(new_state).await {
+                //                         ir_filter_enabled.set(state);
+                //                     }
+                //                 });
+                //             }
+                //         },
+                //         span {
+                //             class: format!(
+                //                 "inline-block h-4 w-4 transform rounded-full bg-white transition-transform {}",
+                //                 if ir_filter_enabled() { "translate-x-7" } else { "translate-x-1" }
+                //             )
+                //         }
+                //     }
+                // }
                 div {
                     class: "flex items-center gap-4",
                     label {
-                        class: format!(
-                            "font-small whitespace-nowrap {}",
-                            if is_admin_user() { "text-white" } else { "text-gray-500" }
-                        ),
+                        class: "text-white font-small whitespace-nowrap",
                         "Save Image"
                     }
 
                     button {
-                        class: "px-3 py-0.5 rounded-lg bg-blue-500 hover:bg-blue-600 active:bg-blue-700 transition-colors disabled:opacity-50 disabled:cursor-not-allowed",                        onclick: move |_| {
+                        class: "px-4 py-0.5 rounded-lg bg-blue-500 hover:bg-blue-600 active:bg-blue-700 transition-colors disabled:opacity-50 disabled:cursor-not-allowed",                        onclick: move |_| {
                             spawn(async move {
                                 match save_image_to_gallery().await {
                                     Ok(msg) => {

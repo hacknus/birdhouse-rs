@@ -9,7 +9,7 @@ pub struct UploadResponse {
     pub filename: Option<String>,
 }
 
-#[server]
+#[server(endpoint = "/api/upload_image")]
 pub async fn upload_image(
     file_data: Vec<u8>,
     filename: String,

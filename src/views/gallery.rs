@@ -111,6 +111,8 @@ fn ImageViewer(
     };
 
     let mut saved_scroll_y = use_signal(|| 0.0);
+    let mut touch_start_x = use_signal(|| 0.0);
+    let mut touch_start_y = use_signal(|| 0.0);
 
     use_effect(move || {
         spawn(async move {
@@ -124,40 +126,103 @@ fn ImageViewer(
         unlock_scroll(saved_scroll_y());
     });
 
+    let handle_touchstart = move |evt: TouchEvent| {
+        if let Some(touch) = evt.data().touches().first() {
+            touch_start_x.set(touch.screen_coordinates().x as f64);
+            touch_start_y.set(touch.screen_coordinates().y as f64);
+        }
+    };
+
+    let handle_touchend = move |evt: TouchEvent| {
+        if let Some(touch) = evt.data().target_touches().first() {
+            let end_x = touch.page_coordinates().x as f64;
+            let end_y = touch.page_coordinates().y as f64;
+            let diff_x = end_x - touch_start_x();
+            let diff_y = end_y - touch_start_y();
+
+            if diff_x.abs() > diff_y.abs() && diff_x.abs() > 50.0 {
+                if diff_x > 0.0 {
+                    on_prev.call(());
+                } else {
+                    on_next.call(());
+                }
+            }
+        }
+    };
+
+    let handle_backdrop_click = move |_evt: MouseEvent| {
+        on_close.call(());
+    };
+
     rsx! {
         div {
-            class: "fixed inset-0 bg-black bg-opacity-90 z-50 flex items-center justify-center",
+            class: "backdrop fixed inset-0 bg-black bg-opacity-90 z-50 flex items-center justify-center",
             tabindex: 0,
-            onkeydown: handle_keydown,
             "data-viewer": "true",
+            onkeydown: handle_keydown,
+            ontouchstart: handle_touchstart,
+            ontouchend: handle_touchend,
+            onclick: handle_backdrop_click,
+            onmounted: move |_| {
+                #[cfg(target_arch = "wasm32")]
+                {
+                    if let Some(window) = web_sys::window() {
+                        if let Some(document) = window.document() {
+                            if let Some(element) = document.query_selector("[data-viewer]").ok().flatten() {
+                                use wasm_bindgen::JsCast;
+                                if let Some(html_element) = element.dyn_ref::<web_sys::HtmlElement>() {
+                                    let _ = html_element.focus();
+                                }
+                            }
+                        }
+                    }
+                }
+            },
 
             button {
                 class: "absolute top-4 right-4 text-white text-3xl hover:text-red-500 transition-colors z-10",
-                onclick: move |_| on_close.call(()),
+                onclick: move |evt| {
+                    evt.stop_propagation();
+                    on_close.call(());
+                },
                 "✕"
             }
 
             button {
-                class: "absolute left-4 text-white text-5xl hover:text-blue-500 transition-colors",
-                onclick: move |_| on_prev.call(()),
+                class: "absolute left-4 text-white text-5xl hover:text-blue-500 transition-colors hidden md:block z-10",
+                onclick: move |evt| {
+                    evt.stop_propagation();
+                    on_prev.call(());
+                },
                 "‹"
             }
 
-            div { class: "max-w-7xl max-h-screen p-8 flex flex-col items-center",
-                img {
-                    src: "{current_image.url}",
-                    alt: "{current_image.filename}",
-                    class: "max-w-full max-h-[80vh] object-contain rounded-lg"
-                }
-                p { class: "text-white mt-4 text-lg",
-                    "{current_image.filename} ({idx + 1} of {images.len()})"
-                }
+            button {
+                class: "absolute right-4 text-white text-5xl hover:text-blue-500 transition-colors hidden md:block z-10",
+                onclick: move |evt| {
+                    evt.stop_propagation();
+                    on_next.call(());
+                },
+                "›"
             }
 
-            button {
-                class: "absolute right-4 text-white text-5xl hover:text-blue-500 transition-colors",
-                onclick: move |_| on_next.call(()),
-                "›"
+            div {
+                class: "viewer-content max-w-[90vw] max-h-[90vh]",
+                onclick: move |evt: MouseEvent| {
+                    evt.stop_propagation();
+                },
+                ontouchstart: move |evt: TouchEvent| {
+                    evt.stop_propagation();
+                },
+                ontouchend: move |evt: TouchEvent| {
+                    evt.stop_propagation();
+                },
+
+                img {
+                    src: current_image.url.clone(),
+                    alt: current_image.filename.clone(),
+                    class: "max-w-full max-h-full object-contain rounded-lg",
+                }
             }
         }
     }
