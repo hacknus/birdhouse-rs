@@ -125,69 +125,114 @@ fn init_webgl_spectrogram(canvas_id: &str, ws_url: &str) -> Result<(), wasm_bind
     }
 
     let log_freq_map = Rc::new(log_freq_map);
-    let socket = WebSocket::new(ws_url)?;
     let frame_buffer = Rc::new(RefCell::new(Vec::<Vec<f64>>::new()));
-    let frame_buffer_clone = frame_buffer.clone();
-
+    let socket_ref = Rc::new(RefCell::new(None::<WebSocket>));
+    let ws_url = ws_url.to_string();
     let last_data_time = Rc::new(RefCell::new(js_sys::Date::now()));
-    let last_data_clone = last_data_time.clone();
 
-    let on_message = Closure::wrap(Box::new(move |event: MessageEvent| {
-        if let Some(text) = event.data().as_string() {
-            if let Ok(fft) = serde_json::from_str::<Vec<f64>>(&text) {
-                let mut buffer = frame_buffer_clone.borrow_mut();
-                if buffer.len() < 10 {
-                    buffer.push(fft);
-                }
-                *last_data_clone.borrow_mut() = js_sys::Date::now();
+    let connect_websocket = {
+        let frame_buffer = frame_buffer.clone();
+        let socket_ref = socket_ref.clone();
+        let last_data_time = last_data_time.clone();
+        let ws_url = ws_url.clone();
+
+        move || {
+            if socket_ref.borrow().is_some() {
+                return;
             }
-        }
-    }) as Box<dyn FnMut(_)>);
 
-    socket.set_onmessage(Some(on_message.as_ref().unchecked_ref()));
-    on_message.forget();
+            let socket = match WebSocket::new(&ws_url) {
+                Ok(s) => s,
+                Err(e) => {
+                    web_sys::console::error_1(&format!("Failed to create WebSocket: {:?}", e).into());
+                    return;
+                }
+            };
+
+            let frame_buffer_clone = frame_buffer.clone();
+            let last_data_clone = last_data_time.clone();
+
+            let on_message = Closure::wrap(Box::new(move |event: MessageEvent| {
+                if let Some(text) = event.data().as_string() {
+                    if let Ok(fft) = serde_json::from_str::<Vec<f64>>(&text) {
+                        let mut buffer = frame_buffer_clone.borrow_mut();
+                        if buffer.len() < 10 {
+                            buffer.push(fft);
+                        }
+                        *last_data_clone.borrow_mut() = js_sys::Date::now();
+                    }
+                }
+            }) as Box<dyn FnMut(_)>);
+
+            let on_open = Closure::wrap(Box::new(move |_: web_sys::Event| {
+                web_sys::console::log_1(&"Spectrogram WebSocket connected".into());
+            }) as Box<dyn FnMut(web_sys::Event)>);
+
+            let on_error = Closure::wrap(Box::new(move |e: web_sys::ErrorEvent| {
+                web_sys::console::error_1(&format!("Spectrogram WebSocket error: {:?}", e).into());
+            }) as Box<dyn FnMut(web_sys::ErrorEvent)>);
+
+            let socket_ref_close = socket_ref.clone();
+            let on_close = Closure::wrap(Box::new(move |_: web_sys::CloseEvent| {
+                web_sys::console::warn_1(&"Spectrogram WebSocket closed, will retry".into());
+                *socket_ref_close.borrow_mut() = None;
+            }) as Box<dyn FnMut(web_sys::CloseEvent)>);
+
+            socket.set_onmessage(Some(on_message.as_ref().unchecked_ref()));
+            socket.set_onopen(Some(on_open.as_ref().unchecked_ref()));
+            socket.set_onerror(Some(on_error.as_ref().unchecked_ref()));
+            socket.set_onclose(Some(on_close.as_ref().unchecked_ref()));
+
+            on_message.forget();
+            on_open.forget();
+            on_error.forget();
+            on_close.forget();
+
+            *socket_ref.borrow_mut() = Some(socket);
+        }
+    };
+
+    connect_websocket();
 
     let ctx_render = ctx.clone();
     let canvas_render = canvas.clone();
     let log_freq_map_render = log_freq_map.clone();
-
-    // Pre-allocate pixel buffer outside render loop
     let pixel_buffer = Rc::new(RefCell::new(vec![0u8; HEIGHT as usize * 4]));
 
     let render_loop = Rc::new(RefCell::new(None::<Closure<dyn FnMut()>>));
     let render_loop_clone = render_loop.clone();
 
     *render_loop.borrow_mut() = Some(Closure::wrap(Box::new(move || {
-        // Early exit if no data to render
-        if frame_buffer.borrow().is_empty() {
-            let window = web_sys::window().unwrap();
-            let _ = window.set_timeout_with_callback_and_timeout_and_arguments_0(
-                render_loop_clone.borrow().as_ref().unwrap().as_ref().unchecked_ref(),
-                16  // Check again in 16ms
-            );
-            return;
+        // Check connection and reconnect if needed
+        if socket_ref.borrow().is_none() {
+            connect_websocket();
         }
 
-        if let Some(fft) = frame_buffer.borrow_mut().pop() {
-            // Shift canvas left by 1 pixel
-            let _ = ctx_render.draw_image_with_html_canvas_element(
-                &canvas_render,
-                -1.0,
-                0.0
-            );
+        // Check if we have data and pop it in a separate scope
+        let fft_data = frame_buffer.borrow_mut().pop();
+        let has_data = fft_data.is_some();
 
-            // Reuse pre-allocated pixel buffer
+        let delay = if let Some(fft) = fft_data {
+            // Process data at 30 FPS
+            let _ = ctx_render.draw_image_with_html_canvas_element(&canvas_render, -1.0, 0.0);
+
             let mut pixels = pixel_buffer.borrow_mut();
             for y in 0..HEIGHT as usize {
                 let bin = log_freq_map_render[y];
                 let v = fft.get(bin).copied().unwrap_or(0.0);
+
                 let norm = ((v + 6.0) / 6.0).clamp(0.0, 1.0);
-                let c = (norm * 255.0) as u8;
+                let enhanced = norm.powf(1.2);
+
+                // let contrast = 0.5;
+                // let contrasted = ((enhanced - 0.5) * contrast + 0.5).clamp(0.0, 1.0);
+
+                let c = (enhanced * 255.0) as u8;
 
                 let idx = y * 4;
                 pixels[idx] = c;
-                pixels[idx + 1] = (c as f64 * 0.6) as u8;
-                pixels[idx + 2] = 255;
+                pixels[idx + 1] = (c as f64 * 0.7) as u8;
+                pixels[idx + 2] = (c as u16 + 80).min(255) as u8;
                 pixels[idx + 3] = 255;
             }
 
@@ -198,13 +243,16 @@ fn init_webgl_spectrogram(canvas_id: &str, ws_url: &str) -> Result<(), wasm_bind
             ) {
                 let _ = ctx_render.put_image_data(&image_data, (WIDTH - 1) as f64, 0.0);
             }
-        }
 
-        // Use setTimeout instead of rAF to control frame rate precisely
+            33 // 30 FPS when rendering
+        } else {
+            1000 // 1 second when idle (no data)
+        };
+
         let window = web_sys::window().unwrap();
         let _ = window.set_timeout_with_callback_and_timeout_and_arguments_0(
             render_loop_clone.borrow().as_ref().unwrap().as_ref().unchecked_ref(),
-            33  // 30 FPS
+            delay
         );
     }) as Box<dyn FnMut()>));
 
@@ -213,18 +261,6 @@ fn init_webgl_spectrogram(canvas_id: &str, ws_url: &str) -> Result<(), wasm_bind
         render_loop.borrow().as_ref().unwrap().as_ref().unchecked_ref(),
         0
     )?;
-
-    let on_open = Closure::wrap(Box::new(move |_: web_sys::Event| {
-        web_sys::console::log_1(&"Spectrogram WebSocket connected".into());
-    }) as Box<dyn FnMut(web_sys::Event)>);
-    socket.set_onopen(Some(on_open.as_ref().unchecked_ref()));
-    on_open.forget();
-
-    let on_error = Closure::wrap(Box::new(move |e: web_sys::ErrorEvent| {
-        web_sys::console::error_1(&format!("Spectrogram WebSocket error: {:?}", e).into());
-    }) as Box<dyn FnMut(web_sys::ErrorEvent)>);
-    socket.set_onerror(Some(on_error.as_ref().unchecked_ref()));
-    on_error.forget();
 
     ctx.set_fill_style(&"black".into());
     ctx.fill_rect(0.0, 0.0, WIDTH as f64, HEIGHT as f64);
