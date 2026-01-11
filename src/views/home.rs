@@ -105,7 +105,7 @@ fn init_webgl_spectrogram(canvas_id: &str, ws_url: &str) -> Result<(), wasm_bind
 
     const HEIGHT: u32 = 256;
     const SECONDS: u32 = 20;
-    const FPS: u32 = 30;
+    const FPS: u32 = 20;
     const WIDTH: u32 = SECONDS * FPS;
 
     canvas.set_width(WIDTH);
