@@ -95,19 +95,6 @@ async fn toggle_ir_led(enabled: bool) -> Result<bool, ServerFnError> {
         .map_err(ServerFnError::new)
 }
 
-#[server]
-async fn toggle_ir_filter(enabled: bool) -> Result<bool, ServerFnError> {
-    let cmd = if enabled {
-        "[CMD] IR FILTER ON"
-    } else {
-        "[CMD] IR FILTER OFF"
-    };
-
-    tcp_client::send_command(cmd)
-        .await
-        .map(|_| enabled)
-        .map_err(ServerFnError::new)
-}
 
 #[server]
 async fn get_ir_state() -> Result<bool, ServerFnError> {
@@ -116,22 +103,6 @@ async fn get_ir_state() -> Result<bool, ServerFnError> {
         .map_err(|e| ServerFnError::new(e))?;
     let is_on = response.to_lowercase().contains("on") || response.contains("1");
     Ok(is_on)
-}
-
-#[server]
-async fn get_admin_feature_state() -> Result<bool, ServerFnError> {
-    let response = tcp_client::send_command("[CMD] GET IR FILTER STATE")
-        .await
-        .map_err(|e| ServerFnError::new(e))?;
-    let is_on = response.to_lowercase().contains("on") || response.contains("1");
-    Ok(is_on)
-}
-
-#[server]
-async fn is_admin() -> Result<bool, ServerFnError> {
-    // TODO: Implement actual admin check (e.g., check session, JWT token, etc.)
-    // For now, return false
-    Ok(false)
 }
 
 #[cfg(target_arch = "wasm32")]
@@ -333,25 +304,11 @@ pub fn Home() -> Element {
     let mut config = use_resource(|| async move { get_stream_config().await.ok() });
     let mut tcp_state = use_context::<tcp_state::TcpState>();
     let mut ir_enabled = tcp_state.ir_enabled;
-    let mut ir_filter_enabled = tcp_state.ir_filter_enabled;
-    let mut is_admin_user = tcp_state.is_admin;
 
     // Load initial states in background without blocking render
     use_resource(move || async move {
         if let Ok(state) = get_ir_state().await {
             ir_enabled.set(state);
-        }
-    });
-
-    use_resource(move || async move {
-        if let Ok(state) = get_admin_feature_state().await {
-            ir_filter_enabled.set(state);
-        }
-    });
-
-    use_resource(move || async move {
-        if let Ok(admin) = is_admin().await {
-            is_admin_user.set(admin);
         }
     });
 
@@ -361,7 +318,7 @@ pub fn Home() -> Element {
         use_effect(move || {
             if !tcp_initialized() && !*tcp_state.ws_connected.read() {
                 spawn(async move {
-                    gloo_timers::future::sleep(std::time::Duration::from_millis(500)).await;
+                    // gloo_timers::future::sleep(std::time::Duration::from_millis(500)).await;
                     tcp_state.init_websocket();
                 });
                 tcp_initialized.set(true);
@@ -432,45 +389,6 @@ pub fn Home() -> Element {
                         }
                     }
                 }
-
-                // div {
-                //     class: "flex items-center gap-3",
-                //     label {
-                //         class: format!(
-                //             "font-small whitespace-nowrap {}",
-                //             if is_admin_user() { "text-white" } else { "text-gray-500" }
-                //         ),
-                //         "IR Filter"
-                //     }
-                //     button {
-                //         class: format!(
-                //             "relative inline-flex h-6 w-12 items-center rounded-full transition-colors {} {}",
-                //             if ir_filter_enabled() {
-                //                 if is_admin_user() { "bg-blue-500" } else { "bg-gray-500" }
-                //             } else {
-                //                 "bg-gray-600"
-                //             },
-                //             if !is_admin_user() { "opacity-50 cursor-not-allowed" } else { "cursor-pointer" }
-                //         ),
-                //         disabled: !is_admin_user(),
-                //         onclick: move |_| {
-                //             if is_admin_user() {
-                //                 let new_state = !ir_filter_enabled();
-                //                 spawn(async move {
-                //                     if let Ok(state) = toggle_ir_filter(new_state).await {
-                //                         ir_filter_enabled.set(state);
-                //                     }
-                //                 });
-                //             }
-                //         },
-                //         span {
-                //             class: format!(
-                //                 "inline-block h-4 w-4 transform rounded-full bg-white transition-transform {}",
-                //                 if ir_filter_enabled() { "translate-x-7" } else { "translate-x-1" }
-                //             )
-                //         }
-                //     }
-                // }
                 div {
                     class: "flex items-center gap-4",
                     label {
