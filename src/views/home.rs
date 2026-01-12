@@ -32,11 +32,12 @@ async fn save_image_to_gallery() -> Result<String, ServerFnError> {
     // Remove timestamps older than 1 hour
     tracker.retain(|&ts| ts > one_hour_ago);
 
-    if tracker.len() >= 10 {
-        return Err(ServerFnError::new(
-            "Rate limit exceeded. Maximum 10 images per hour.",
-        ));
-    }
+    // TODO solve this properly
+    // if tracker.len() >= 10 {
+    //     return Err(ServerFnError::new(
+    //         "Rate limit exceeded. Maximum 10 images per hour.",
+    //     ));
+    // }
 
     // Add current timestamp
     tracker.push(now);

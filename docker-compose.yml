@@ -6,9 +6,5 @@ services:
     env_file:
       - .env
     volumes:
-      - ./public/gallery_cache:/app/public/gallery_cache
+      - ./public/gallery_cache:/usr/local/app/public/gallery_cache
     restart: unless-stopped
-
-volumes:
-  gallery_cache:
-    driver: local
