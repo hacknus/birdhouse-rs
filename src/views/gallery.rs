@@ -3,10 +3,161 @@ use serde::{Deserialize, Serialize};
 
 use crate::views::gallery_client::{lock_scroll, save_scroll_position, unlock_scroll};
 
+const ARROW_LEFT: Asset = asset!("/assets/svg/arrow-left-svgrepo-com.svg");
+const ARROW_RIGHT: Asset = asset!("/assets/svg/arrow-right-svgrepo-com.svg");
+
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 struct ImageInfo {
     filename: String,
     url: String,
+}
+
+#[component]
+fn ImageViewer(
+    images: Vec<ImageInfo>,
+    current_index: Option<usize>,
+    on_close: EventHandler<()>,
+    on_next: EventHandler<()>,
+    on_prev: EventHandler<()>,
+) -> Element {
+    let Some(idx) = current_index else {
+        return rsx! { div {} };
+    };
+
+    let current_image = &images[idx];
+    let mut saved_scroll_y = use_signal(|| 0.0);
+
+    // State to track swipe gestures
+    let mut touch_start_x = use_signal(|| 0.0);
+    let mut touch_current_x = use_signal(|| 0.0);
+
+    use_effect(move || {
+        spawn(async move {
+            let scroll_y = save_scroll_position();
+            saved_scroll_y.set(scroll_y);
+            lock_scroll(scroll_y);
+        });
+    });
+
+    use_drop(move || {
+        unlock_scroll(saved_scroll_y());
+    });
+
+    // Capture the starting point of the touch
+    let handle_touchstart = move |evt: TouchEvent| {
+        if let Some(touch) = evt.touches().first() {
+            let x = touch.page_coordinates().x as f64;
+            touch_start_x.set(x);
+            touch_current_x.set(x); // Initialize "current" to start
+        }
+    };
+
+    // Continuously update the "current" point as the finger moves
+    let handle_touchmove = move |evt: TouchEvent| {
+        if let Some(touch) = evt.touches().first() {
+            let x = touch.page_coordinates().x as f64;
+            touch_current_x.set(x);
+        }
+    };
+
+    // Calculate the difference between start and the last known move position
+    let handle_touchend = move |evt: TouchEvent| {
+        evt.stop_propagation(); // Try to stop click events firing after swipe
+
+        let diff_x = touch_current_x() - touch_start_x();
+
+        // 50px threshold for a swipe
+        if diff_x.abs() > 50.0 {
+            if diff_x > 0.0 {
+                // Swiped Right -> Previous
+                on_prev.call(());
+            } else {
+                // Swiped Left -> Next
+                on_next.call(());
+            }
+        }
+    };
+
+    let handle_keydown = move |evt: KeyboardEvent| match evt.key().to_string().as_str() {
+        "Escape" => on_close.call(()),
+        "ArrowLeft" => on_prev.call(()),
+        "ArrowRight" => on_next.call(()),
+        _ => {}
+    };
+
+    rsx! {
+        div {
+            class: "backdrop fixed inset-0 bg-black bg-opacity-90 z-50 flex items-center justify-center",
+            tabindex: 0,
+            "data-viewer": "true",
+            onkeydown: handle_keydown,
+            ontouchstart: handle_touchstart,
+            ontouchmove: handle_touchmove,
+            ontouchend: handle_touchend,
+            onclick: move |_evt: MouseEvent| on_close.call(()),
+            onmounted: move |_| {
+                #[cfg(target_arch = "wasm32")]
+                {
+                    if let Some(window) = web_sys::window() {
+                        if let Some(document) = window.document() {
+                            if let Some(element) = document.query_selector("[data-viewer]").ok().flatten() {
+                                use wasm_bindgen::JsCast;
+                                if let Some(html_element) = element.dyn_ref::<web_sys::HtmlElement>() {
+                                    let _ = html_element.focus();
+                                }
+                            }
+                        }
+                    }
+                }
+            },
+
+            button {
+                class: "absolute right-4 text-white text-3xl hover:text-red-500 transition-colors z-60 bg-black bg-opacity-30 rounded-lg px-3 py-2",
+                style: "top: 68px;",
+                onclick: move |evt| {
+                    evt.stop_propagation();
+                    on_close.call(());
+                },
+                "✕"
+            }
+
+            button {
+                class: "absolute left-4 top-1/2 -translate-y-1/2 z-10 bg-white bg-opacity-30 rounded-lg px-3 py-2 h-12 w-auto flex items-center justify-center hover:bg-opacity-50 transition-all",
+                onclick: move |evt| {
+                    evt.stop_propagation();
+                    on_prev.call(());
+                },
+                img {
+                    src: ARROW_LEFT,
+                    class: "w-6 h-6",
+                    alt: "Previous"
+                }
+            }
+
+            button {
+                class: "absolute right-4 top-1/2 -translate-y-1/2 z-10 bg-white bg-opacity-30 rounded-lg px-3 py-2 h-12 w-auto flex items-center justify-center hover:bg-opacity-50 transition-all",
+                onclick: move |evt| {
+                    evt.stop_propagation();
+                    on_next.call(());
+                },
+                img {
+                    src: ARROW_RIGHT,
+                    class: "w-6 h-6",
+                    alt: "Next"
+                }
+            }
+
+            div {
+                class: "viewer-content max-w-[90vw] max-h-[90vh]",
+                onclick: move |evt: MouseEvent| evt.stop_propagation(),
+                img {
+                    src: current_image.url.clone(),
+                    alt: current_image.filename.clone(),
+                    class: "max-w-full max-h-full object-contain rounded-lg",
+                }
+            }
+        }
+    }
 }
 
 pub fn Gallery() -> Element {
@@ -33,7 +184,6 @@ pub fn Gallery() -> Element {
     rsx! {
         div { class: "min-h-screen w-full bg-slate-900 p-8",
             h1 { class: "text-4xl font-bold text-white mb-8 text-center", "gallery" }
-
             if loading() {
                 div { class: "flex justify-center items-center h-64",
                     p { class: "text-white text-xl", "Loading images..." }
@@ -83,151 +233,6 @@ pub fn Gallery() -> Element {
                             }
                         }
                     }
-                }
-            }
-        }
-    }
-}
-
-#[component]
-fn ImageViewer(
-    images: Vec<ImageInfo>,
-    current_index: Option<usize>,
-    on_close: EventHandler<()>,
-    on_next: EventHandler<()>,
-    on_prev: EventHandler<()>,
-) -> Element {
-    let Some(idx) = current_index else {
-        return rsx! { div {} };
-    };
-
-    let current_image = &images[idx];
-
-    let handle_keydown = move |evt: KeyboardEvent| match evt.key().to_string().as_str() {
-        "Escape" => on_close.call(()),
-        "ArrowLeft" => on_prev.call(()),
-        "ArrowRight" => on_next.call(()),
-        _ => {}
-    };
-
-    let mut saved_scroll_y = use_signal(|| 0.0);
-    let mut touch_start_x = use_signal(|| 0.0);
-    let mut touch_start_y = use_signal(|| 0.0);
-
-    use_effect(move || {
-        spawn(async move {
-            let scroll_y = save_scroll_position();
-            saved_scroll_y.set(scroll_y);
-            lock_scroll(scroll_y);
-        });
-    });
-
-    use_drop(move || {
-        unlock_scroll(saved_scroll_y());
-    });
-
-    let handle_touchstart = move |evt: TouchEvent| {
-        if let Some(touch) = evt.data().touches().first() {
-            touch_start_x.set(touch.screen_coordinates().x as f64);
-            touch_start_y.set(touch.screen_coordinates().y as f64);
-        }
-    };
-
-    let mut touch_end_x = use_signal(|| 0.0);
-    let mut touch_end_y = use_signal(|| 0.0);
-
-    let handle_touchmove = move |evt: TouchEvent| {
-        if let Some(touch) = evt.data().touches_changed().first() {
-            touch_end_x.set(touch.page_coordinates().x as f64);
-            touch_end_y.set(touch.page_coordinates().y as f64);
-        }
-    };
-
-    let handle_touchend = move |_evt: TouchEvent| {
-        let diff_x = touch_end_x() - touch_start_x();
-        let diff_y = touch_end_y() - touch_start_y();
-
-        if diff_x.abs() > diff_y.abs() && diff_x.abs() > 50.0 {
-            if diff_x > 0.0 {
-                on_prev.call(());
-            } else {
-                on_next.call(());
-            }
-        }
-    };
-
-    let handle_backdrop_click = move |_evt: MouseEvent| {
-        on_close.call(());
-    };
-
-    rsx! {
-        div {
-            class: "backdrop fixed inset-0 bg-black bg-opacity-90 z-50 flex items-center justify-center",
-            tabindex: 0,
-            "data-viewer": "true",
-            onkeydown: handle_keydown,
-            ontouchstart: handle_touchstart,
-            ontouchend: handle_touchend,
-            onclick: handle_backdrop_click,
-            onmounted: move |_| {
-                #[cfg(target_arch = "wasm32")]
-                {
-                    if let Some(window) = web_sys::window() {
-                        if let Some(document) = window.document() {
-                            if let Some(element) = document.query_selector("[data-viewer]").ok().flatten() {
-                                use wasm_bindgen::JsCast;
-                                if let Some(html_element) = element.dyn_ref::<web_sys::HtmlElement>() {
-                                    let _ = html_element.focus();
-                                }
-                            }
-                        }
-                    }
-                }
-            },
-
-            button {
-                class: "absolute top-4 right-4 text-white text-3xl hover:text-red-500 transition-colors z-10",
-                onclick: move |evt| {
-                    evt.stop_propagation();
-                    on_close.call(());
-                },
-                "✕"
-            }
-
-            button {
-                class: "absolute left-4 text-white text-5xl hover:text-blue-500 transition-colors hidden md:block z-10",
-                onclick: move |evt| {
-                    evt.stop_propagation();
-                    on_prev.call(());
-                },
-                "‹"
-            }
-
-            button {
-                class: "absolute right-4 text-white text-5xl hover:text-blue-500 transition-colors hidden md:block z-10",
-                onclick: move |evt| {
-                    evt.stop_propagation();
-                    on_next.call(());
-                },
-                "›"
-            }
-
-            div {
-                class: "viewer-content max-w-[90vw] max-h-[90vh]",
-                onclick: move |evt: MouseEvent| {
-                    evt.stop_propagation();
-                },
-                ontouchstart: move |evt: TouchEvent| {
-                    evt.stop_propagation();
-                },
-                ontouchend: move |evt: TouchEvent| {
-                    evt.stop_propagation();
-                },
-
-                img {
-                    src: current_image.url.clone(),
-                    alt: current_image.filename.clone(),
-                    class: "max-w-full max-h-full object-contain rounded-lg",
                 }
             }
         }
