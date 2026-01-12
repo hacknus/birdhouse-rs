@@ -9,6 +9,27 @@ pub fn Navbar() -> Element {
     let navigator = use_navigator();
     let mut dropdown_value = use_signal(|| String::new());
 
+    // Initialize the select to reflect the current path on first render (wasm only)
+    use_effect(move || {
+        #[cfg(target_arch = "wasm32")]
+        {
+            if let Some(window) = web_sys::window() {
+                if let Ok(path) = window.location().pathname() {
+                    let v = if path.starts_with("/gallery") {
+                        "gallery"
+                    } else if path.starts_with("/making") {
+                        "making"
+                    } else if path.starts_with("/vogu") {
+                        "vogu"
+                    } else {
+                        "home"
+                    };
+                    dropdown_value.set(v.to_string());
+                }
+            }
+        }
+    });
+
     rsx! {
         document::Link { rel: "stylesheet", href: NAVBAR_CSS }
 
@@ -51,10 +72,10 @@ pub fn Navbar() -> Element {
                                 let _ = navigator.push(route);
                             }
 
-                            dropdown_value.set(String::new());
+                            // keep the selected value so the select shows the current page
+                            dropdown_value.set(value.clone());
                         }
                     },
-                    option { value: "", disabled: true, hidden: true, "vögeli" }
                     option { value: "home", "Home" }
                     option { value: "gallery", "Gallery" }
                     option { value: "making", "Making of" }
