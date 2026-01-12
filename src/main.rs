@@ -72,6 +72,8 @@ async fn main() {
     use tokio::sync::broadcast;
     use tokio::time::{interval, Duration};
     use tower_http::services::ServeDir;
+    use api::gallery::upload_image_multipart;
+    use axum::routing::post;
 
     static ACTIVE_USERS: Lazy<AtomicUsize> = Lazy::new(|| AtomicUsize::new(0));
 
@@ -199,6 +201,7 @@ async fn main() {
     println!("Listening on http://{}", addr);
 
     let router = Router::new()
+        .route("/api/upload_image", post(upload_image_multipart))
         .route("/voegeli", get(|| async { Redirect::temporary("/") }))
         .route("/ws/tcp", get(tcp_websocket_handler))
         .nest_service("/assets", ServeDir::new("public/assets"))
