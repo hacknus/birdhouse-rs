@@ -42,6 +42,25 @@ fn App() -> Element {
         tcp_state.init_websocket();
     });
 
+    // Ensure toast container exists in the DOM (wasm only)
+    use_effect(move || {
+        #[cfg(target_arch = "wasm32")]
+        {
+            if let Some(window) = web_sys::window() {
+                if let Some(document) = window.document() {
+                    if document.get_element_by_id("__dx-toast-decor").is_none() {
+                        if let Ok(div) = document.create_element("div") {
+                            let _ = div.set_attribute("id", "__dx-toast-decor");
+                            if let Some(body) = document.body() {
+                                let _ = body.append_child(&div);
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    });
+
     rsx! {
         document::Title { "vögeli" }
         document::Link { rel: "icon", href: FAVICON }
