@@ -61,7 +61,7 @@ pub fn VoguGuru() -> Element {
                 }}
             "#)}
         }
-        // document::Link { rel: "stylesheet", href: VOGUGURU_CSS }
+        document::Link { rel: "stylesheet", href: VOGUGURU_CSS }
 
         div {
             class: "aarewasser",

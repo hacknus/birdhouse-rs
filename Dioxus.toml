@@ -7,14 +7,14 @@ title = "vögeli"
 
 # include `assets` in web platform
 [web.resource]
-static_dir = "static"
+static_dir = "assets"
 
 # Additional CSS style files
 style = [
-    "/assets/styling/main.css",
-    "/assets/tailwind.css",
-    "/assets/styling/navbar.css",
-    "/assets/styling/voguguru.css"
+    "assets/styling/main.css",
+    "assets/tailwind.css",
+    "assets/styling/navbar.css",
+    "assets/styling/voguguru.css"
 ]
 
 # Additional JavaScript files
