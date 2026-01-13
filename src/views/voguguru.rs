@@ -1,12 +1,15 @@
 use dioxus::prelude::*;
 use serde::{Deserialize, Serialize};
 
-const VOGUGURU_CSS: Asset = asset!("/assets/styling/voguguru.css");
-const PATTERN_HOCH: Asset = asset!("/assets/svg/aare-guru-pattern-hoch.svg");
-const PATTERN_QUER: Asset = asset!("/assets/svg/aare-guru-pattern-quer.svg");
-const FONT_WOFF2: Asset = asset!("/assets/webfonts/2D81A6_0_0.woff2");
-const FONT_WOFF: Asset = asset!("/assets/webfonts/2D81A6_0_0.woff");
-const FONT_TTF: Asset = asset!("/assets/webfonts/2D81A6_0_0.ttf");
+const VOGUGURU_CSS: Asset = asset!(
+    "/assets/styling/voguguru.css",
+    AssetOptions::css().with_static_head(true)
+);
+const PATTERN_HOCH: Asset = asset!("/assets/svg/aare-guru-pattern-hoch.svg",);
+const PATTERN_QUER: Asset = asset!("/assets/svg/aare-guru-pattern-quer.svg",);
+const FONT_WOFF2: Asset = asset!("/assets/webfonts/2D81A6_0_0.woff2",);
+const FONT_WOFF: Asset = asset!("/assets/webfonts/2D81A6_0_0.woff",);
+const FONT_TTF: Asset = asset!("/assets/webfonts/2D81A6_0_0.ttf",);
 
 #[derive(Serialize, Deserialize, Clone, Debug, PartialEq)]
 struct GuruData {

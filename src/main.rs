@@ -30,9 +30,18 @@ enum Route {
 }
 
 const FAVICON: Asset = asset!("/assets/favicon.ico");
-const MAIN_CSS: Asset = asset!("/assets/styling/main.css");
-const NAVBAR_CSS: Asset = asset!("/assets/styling/navbar.css");
-const TAILWIND_CSS: Asset = asset!("/assets/tailwind.css");
+const MAIN_CSS: Asset = asset!(
+    "/assets/styling/main.css",
+    AssetOptions::css().with_static_head(true)
+);
+const NAVBAR_CSS: Asset = asset!(
+    "/assets/styling/navbar.css",
+    AssetOptions::css().with_static_head(true)
+);
+const TAILWIND_CSS: Asset = asset!(
+    "/assets/tailwind.css",
+    AssetOptions::css().with_static_head(true)
+);
 
 #[component]
 fn App() -> Element {
@@ -46,15 +55,13 @@ fn App() -> Element {
     // Ensure toast container exists in the DOM (wasm only)
     #[cfg(target_arch = "wasm32")]
     use_effect(move || {
-        {
-            if let Some(window) = web_sys::window() {
-                if let Some(document) = window.document() {
-                    if document.get_element_by_id("__dx-toast-decor").is_none() {
-                        if let Ok(div) = document.create_element("div") {
-                            let _ = div.set_attribute("id", "__dx-toast-decor");
-                            if let Some(body) = document.body() {
-                                let _ = body.append_child(&div);
-                            }
+        if let Some(window) = web_sys::window() {
+            if let Some(document) = window.document() {
+                if document.get_element_by_id("__dx-toast-decor").is_none() {
+                    if let Ok(div) = document.create_element("div") {
+                        let _ = div.set_attribute("id", "__dx-toast-decor");
+                        if let Some(body) = document.body() {
+                            let _ = body.append_child(&div);
                         }
                     }
                 }
@@ -76,6 +83,8 @@ fn App() -> Element {
 #[cfg(feature = "server")]
 #[tokio::main]
 async fn main() {
+    use api::gallery::upload_image_multipart;
+    use axum::routing::post;
     use axum::Router;
     use axum::{
         extract::ws::{WebSocket, WebSocketUpgrade},
@@ -93,8 +102,6 @@ async fn main() {
     use tokio::sync::broadcast;
     use tokio::time::{interval, Duration};
     use tower_http::services::ServeDir;
-    use api::gallery::upload_image_multipart;
-    use axum::routing::post;
 
     static ACTIVE_USERS: Lazy<AtomicUsize> = Lazy::new(|| AtomicUsize::new(0));
 
