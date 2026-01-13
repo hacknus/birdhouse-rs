@@ -244,8 +244,22 @@ fn init_webgl_spectrogram(canvas_id: &str, ws_url: &str) -> Result<(), wasm_bind
                 let bin = log_freq_map_render[y];
                 let v = fft.get(bin).copied().unwrap_or(0.0);
 
-                let norm = ((v + 6.0) / 6.0).clamp(0.0, 1.0);
-                let enhanced = norm.powf(1.2);
+                // v is already log10 magnitude, around -6.0 .. +1.0
+
+                let min_db = fft.iter().copied().reduce(f64::min).unwrap_or(-6.0);
+                let max_db = fft.iter().copied().reduce(f64::max).unwrap_or(1.0);
+
+                // Normalize
+                let mut norm = (v - min_db) / (max_db - min_db);
+                norm = norm.clamp(0.0, 1.0);
+
+                let frac = 1.0 - (y as f64 / HEIGHT as f64);
+
+                // Gentle tilt: 0.7x → 1.3x
+                let freq_gain = 0.7 + 0.6 * frac.powf(1.5);
+
+                // Soft contrast curve (Merlin-like)
+                let enhanced = (norm.powf(1.5) * freq_gain).clamp(0.0, 1.0);
 
                 // let contrast = 0.5;
                 // let contrasted = ((enhanced - 0.5) * contrast + 0.5).clamp(0.0, 1.0);
