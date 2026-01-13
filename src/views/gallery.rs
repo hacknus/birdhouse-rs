@@ -245,15 +245,20 @@ fn ImageViewer(
     // inner slide wrapper pads left/right so images don't touch edges and create a small gap between slides
     let inner_slide_style = format!("width: 100%; padding: 0 {}px; display: flex; align-items: center; justify-content: center;", half_gap);
 
-    // make image almost full viewport width but leave the gap visible
-    let img_style = format!("width: calc(100vw - {}px); max-height: 90vh; object-fit: contain; border-radius: 8px;", gap_px);
+    // Ensure image leaves room for navbar (52px) and caption (~120px)
+    let img_style = format!(
+        "width: calc(100vw - {}px); max-height: calc(100vh - 52px - 120px); object-fit: contain; border-radius: 8px;",
+        gap_px
+    );
 
     let prev_display = format_display(&images[prev_index].filename);
     let next_display = format_display(&images[next_index].filename);
 
     rsx! {
+        // Position viewer under navbar by setting top to 52px so navbar top remains visible.
         div {
-            class: "backdrop fixed inset-0 bg-black bg-opacity-90 z-50 flex items-center justify-center",
+            class: "backdrop fixed bg-black bg-opacity-90 z-50 flex items-center justify-center",
+            style: "top: 52px; left: 0; right: 0; bottom: 0;",
             tabindex: 0,
             "data-viewer": "true",
             onkeydown: handle_keydown,
@@ -313,7 +318,7 @@ fn ImageViewer(
                 }
             }
 
-            // viewer container uses full viewport width so vw translations align with visible area.
+            // viewer container uses available height under navbar
             div {
                 class: "viewer-content w-screen max-h-[90vh] overflow-hidden relative",
                 onclick: move |evt: MouseEvent| evt.stop_propagation(),
