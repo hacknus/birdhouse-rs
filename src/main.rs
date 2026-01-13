@@ -43,8 +43,8 @@ fn App() -> Element {
     });
 
     // Ensure toast container exists in the DOM (wasm only)
+    #[cfg(target_arch = "wasm32")]
     use_effect(move || {
-        #[cfg(target_arch = "wasm32")]
         {
             if let Some(window) = web_sys::window() {
                 if let Some(document) = window.document() {

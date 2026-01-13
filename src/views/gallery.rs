@@ -12,6 +12,7 @@ struct ImageInfo {
     url: String,
 }
 
+// rust
 #[component]
 fn ImageViewer(
     images: Vec<ImageInfo>,
@@ -20,6 +21,9 @@ fn ImageViewer(
     on_next: EventHandler<()>,
     on_prev: EventHandler<()>,
 ) -> Element {
+    use std::time::Duration;
+    use dioxus::prelude::spawn;
+
     let Some(idx) = current_index else {
         return rsx! { div {} };
     };
@@ -30,6 +34,11 @@ fn ImageViewer(
     // State to track swipe gestures
     let mut touch_start_x = use_signal(|| 0.0);
     let mut touch_current_x = use_signal(|| 0.0);
+
+    // Visual offset (px) while dragging / animating
+    let mut swipe_offset = use_signal(|| 0.0);
+    // Whether transitions should be enabled (used to animate snap/slide)
+    let mut is_animating = use_signal(|| false);
 
     use_effect(move || {
         spawn(async move {
@@ -43,12 +52,20 @@ fn ImageViewer(
         unlock_scroll(saved_scroll_y());
     });
 
+    // helper indices for prev/next with wrap
+    let len = images.len();
+    let prev_index = if len > 0 { (idx + len - 1) % len } else { idx };
+    let next_index = if len > 0 { (idx + 1) % len } else { idx };
+
     // Capture the starting point of the touch
     let handle_touchstart = move |evt: TouchEvent| {
         if let Some(touch) = evt.touches().first() {
             let x = touch.page_coordinates().x as f64;
             touch_start_x.set(x);
             touch_current_x.set(x); // Initialize "current" to start
+            // while dragging, disable CSS transition so strip follows finger
+            is_animating.set(false);
+            swipe_offset.set(0.0);
         }
     };
 
@@ -57,6 +74,8 @@ fn ImageViewer(
         if let Some(touch) = evt.touches().first() {
             let x = touch.page_coordinates().x as f64;
             touch_current_x.set(x);
+            let diff = touch_current_x() - touch_start_x();
+            swipe_offset.set(diff);
         }
     };
 
@@ -65,15 +84,74 @@ fn ImageViewer(
         evt.stop_propagation(); // Try to stop click events firing after swipe
 
         let diff_x = touch_current_x() - touch_start_x();
+        let threshold = 50.0;
 
-        // 50px threshold for a swipe
-        if diff_x.abs() > 50.0 {
-            if diff_x > 0.0 {
-                // Swiped Right -> Previous
-                on_prev.call(());
+        // If not compiled to wasm, just call handlers immediately (no animation)
+        #[cfg(not(target_arch = "wasm32"))]
+        {
+            if diff_x.abs() > threshold {
+                if diff_x > 0.0 {
+                    on_prev.call(());
+                } else {
+                    on_next.call(());
+                }
+            }
+            swipe_offset.set(0.0);
+            return;
+        }
+
+        // wasm-only animated behaviour
+        #[cfg(target_arch = "wasm32")]
+        {
+            // decide swipe or snap back
+            if diff_x.abs() > threshold {
+                // animate strip so the neighbouring slide becomes centered
+                is_animating.set(true);
+
+                // compute viewport width in pixels
+                let viewport_px = web_sys::window()
+                    .and_then(|w| w.inner_width().ok())
+                    .and_then(|v| v.as_f64())
+                    .or_else(|| {
+                        web_sys::window()
+                            .and_then(|w| w.document())
+                            .and_then(|d| d.document_element())
+                            .map(|el| el.client_width() as f64)
+                    })
+                    .unwrap_or(0.0);
+
+                // target offset: +/- viewport width so transform goes to 0vw (prev) or -200vw (next)
+                let end_px = if diff_x > 0.0 { viewport_px } else { -viewport_px };
+                swipe_offset.set(end_px);
+
+                let on_next = on_next.clone();
+                let on_prev = on_prev.clone();
+                let mut swipe_offset_clone = swipe_offset.clone();
+                let mut is_animating_clone = is_animating.clone();
+                let direction_positive = diff_x > 0.0;
+
+                spawn(async move {
+                    // wait for CSS transition (match duration below)
+                    gloo_timers::future::sleep(Duration::from_millis(300)).await;
+                    if direction_positive {
+                        on_prev.call(());
+                    } else {
+                        on_next.call(());
+                    }
+                    // reset position without transition (prepares for next image)
+                    swipe_offset_clone.set(0.0);
+                    is_animating_clone.set(false);
+                });
             } else {
-                // Swiped Left -> Next
-                on_next.call(());
+                // not a swipe -> snap back to center
+                is_animating.set(true);
+                swipe_offset.set(0.0);
+
+                let mut is_animating_clone = is_animating.clone();
+                spawn(async move {
+                    gloo_timers::future::sleep(Duration::from_millis(180)).await;
+                    is_animating_clone.set(false);
+                });
             }
         }
     };
@@ -84,6 +162,53 @@ fn ImageViewer(
         "ArrowRight" => on_next.call(()),
         _ => {}
     };
+
+    // Small horizontal gap between images (total gap in px)
+    let gap_px = 32; // small distance between images while swiping
+    let half_gap = gap_px / 2;
+
+    // Build transform using *vw* units derived from the current px offset so px/vw mixing can't desync directions.
+    let style_string = {
+        let offset_px = swipe_offset();
+        let transition = if is_animating() { "transform 300ms ease" } else { "none" };
+
+        // viewport width in pixels (wasm only). Non-wasm fallback to 1.0 to avoid divide-by-zero.
+        #[cfg(target_arch = "wasm32")]
+        let viewport_px = web_sys::window()
+            .and_then(|w| w.inner_width().ok())
+            .and_then(|v| v.as_f64())
+            .or_else(|| {
+                web_sys::window()
+                    .and_then(|w| w.document())
+                    .and_then(|d| d.document_element())
+                    .map(|el| el.client_width() as f64)
+            })
+            .unwrap_or(1.0);
+
+        #[cfg(not(target_arch = "wasm32"))]
+        let viewport_px: f64 = 1.0;
+
+        let offset_vw = if viewport_px.abs() > 0.0 {
+            (offset_px / viewport_px) * 100.0
+        } else {
+            0.0
+        };
+
+        // center at -100vw, add the offset in vw so final targets become 0vw or -200vw exactly when offset_vw is ±100
+        format!(
+            "width: 300vw; display: flex; align-items: center; justify-content: flex-start; transform: translateX(calc(-100vw + {}vw)); transition: {};",
+            offset_vw, transition
+        )
+    };
+
+    // each slide equals viewport width so adjacent slides sit exactly next to the current
+    let slide_style = "flex: 0 0 100vw; display: flex; align-items: center; justify-content: center;";
+
+    // inner slide wrapper pads left/right so images don't touch edges and create a small gap between slides
+    let inner_slide_style = format!("width: 100%; padding: 0 {}px; display: flex; align-items: center; justify-content: center;", half_gap);
+
+    // make image almost full viewport width but leave the gap visible
+    let img_style = format!("width: calc(100vw - {}px); max-height: 90vh; object-fit: contain; border-radius: 8px;", gap_px);
 
     rsx! {
         div {
@@ -147,13 +272,46 @@ fn ImageViewer(
                 }
             }
 
+            // viewer container uses full viewport width so vw translations align with visible area.
             div {
-                class: "viewer-content max-w-[90vw] max-h-[90vh]",
+                class: "viewer-content w-screen max-h-[90vh] overflow-hidden relative",
                 onclick: move |evt: MouseEvent| evt.stop_propagation(),
-                img {
-                    src: current_image.url.clone(),
-                    alt: current_image.filename.clone(),
-                    class: "max-w-full max-h-full object-contain rounded-lg",
+                // strip that will be translated during swipe (contains prev, current, next)
+                div {
+                    style: "{style_string}",
+                    // prev slide
+                    div { style: "{slide_style}",
+                        div { style: "{inner_slide_style}",
+                            img {
+                                style: "{img_style}",
+                                src: images[prev_index].url.clone(),
+                                alt: images[prev_index].filename.clone(),
+                                class: "rounded-lg",
+                            }
+                        }
+                    }
+                    // current slide
+                    div { style: "{slide_style}",
+                        div { style: "{inner_slide_style}",
+                            img {
+                                style: "{img_style}",
+                                src: current_image.url.clone(),
+                                alt: current_image.filename.clone(),
+                                class: "rounded-lg",
+                            }
+                        }
+                    }
+                    // next slide
+                    div { style: "{slide_style}",
+                        div { style: "{inner_slide_style}",
+                            img {
+                                style: "{img_style}",
+                                src: images[next_index].url.clone(),
+                                alt: images[next_index].filename.clone(),
+                                class: "rounded-lg",
+                            }
+                        }
+                    }
                 }
             }
         }
