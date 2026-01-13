@@ -1,7 +1,9 @@
+// File: `src/views/gallery.rs`
 use dioxus::prelude::*;
 use serde::{Deserialize, Serialize};
 
 use crate::views::gallery_client::{lock_scroll, save_scroll_position, unlock_scroll};
+use std::path::Path;
 
 const ARROW_LEFT: Asset = asset!("/assets/svg/arrow-left-svgrepo-com.svg");
 const ARROW_RIGHT: Asset = asset!("/assets/svg/arrow-right-svgrepo-com.svg");
@@ -12,7 +14,42 @@ struct ImageInfo {
     url: String,
 }
 
-// rust
+// parse filename -> display string (tries to decode YYYYMMDD[ _- ]HHMMSS formats)
+fn format_display(filename: &str) -> String {
+    let stem = Path::new(filename)
+        .file_stem()
+        .and_then(|s| s.to_str())
+        .unwrap_or(filename)
+        .trim()
+        .to_string();
+
+    if stem.is_empty() {
+        return filename.to_string();
+    }
+
+    // normalize `YYYYMMDD_HHMMSS` or `YYYYMMDD-HHMMSS` -> `YYYYMMDDHHMMSS`
+    let normalized = if stem.len() == 15 && (stem.chars().nth(8) == Some('_') || stem.chars().nth(8) == Some('-')) {
+        let mut t = stem.clone();
+        t.remove(8);
+        t
+    } else {
+        stem.clone()
+    };
+
+    if normalized.len() == 14 && normalized.chars().all(|c| c.is_ascii_digit()) {
+        let year = &normalized[0..4];
+        let month = &normalized[4..6];
+        let day = &normalized[6..8];
+        let hour = &normalized[8..10];
+        let minute = &normalized[10..12];
+        let second = &normalized[12..14];
+        format!("{}.{}.{} {}:{}:{}", day, month, year, hour, minute, second)
+    } else {
+        // fallback to original filename (including extension)
+        filename.to_string()
+    }
+}
+
 #[component]
 fn ImageViewer(
     images: Vec<ImageInfo>,
@@ -29,6 +66,7 @@ fn ImageViewer(
     };
 
     let current_image = &images[idx];
+    let current_display = format_display(&current_image.filename);
     let mut saved_scroll_y = use_signal(|| 0.0);
 
     // State to track swipe gestures
@@ -210,6 +248,9 @@ fn ImageViewer(
     // make image almost full viewport width but leave the gap visible
     let img_style = format!("width: calc(100vw - {}px); max-height: 90vh; object-fit: contain; border-radius: 8px;", gap_px);
 
+    let prev_display = format_display(&images[prev_index].filename);
+    let next_display = format_display(&images[next_index].filename);
+
     rsx! {
         div {
             class: "backdrop fixed inset-0 bg-black bg-opacity-90 z-50 flex items-center justify-center",
@@ -285,7 +326,7 @@ fn ImageViewer(
                             img {
                                 style: "{img_style}",
                                 src: images[prev_index].url.clone(),
-                                alt: images[prev_index].filename.clone(),
+                                alt: "{prev_display}",
                                 class: "rounded-lg",
                             }
                         }
@@ -296,7 +337,7 @@ fn ImageViewer(
                             img {
                                 style: "{img_style}",
                                 src: current_image.url.clone(),
-                                alt: current_image.filename.clone(),
+                                alt: "{current_display}",
                                 class: "rounded-lg",
                             }
                         }
@@ -307,18 +348,27 @@ fn ImageViewer(
                             img {
                                 style: "{img_style}",
                                 src: images[next_index].url.clone(),
-                                alt: images[next_index].filename.clone(),
+                                alt: "{next_display}",
                                 class: "rounded-lg",
                             }
                         }
                     }
+                }
+                // Caption underneath the image showing parsed date/time (fallbacks to filename)
+                div {
+                    class: "mt-4 text-center text-white text-sm select-none",
+                    p { class: "opacity-90", "{current_display}" }
                 }
             }
         }
     }
 }
 
+// rust
+// File: `src/views/gallery.rs` — replaced `Gallery` function
 pub fn Gallery() -> Element {
+    use dioxus::prelude::spawn;
+
     let mut images = use_signal(|| Vec::<ImageInfo>::new());
     let mut selected_image = use_signal(|| None::<usize>);
     let mut loading = use_signal(|| true);
@@ -364,11 +414,12 @@ pub fn Gallery() -> Element {
                                 onclick: move |_| selected_image.set(Some(idx)),
                                 img {
                                     src: "{img.url}",
-                                    alt: "{img.filename}",
+                                    // call format_display inline to avoid `let` inside rsx!
+                                    alt: "{format_display(&img.filename)}",
                                     class: "w-full h-64 object-cover group-hover:scale-105 transition-transform duration-200"
                                 }
                                 div { class: "absolute bottom-0 left-0 right-0 bg-black bg-opacity-50 p-2",
-                                    p { class: "text-white text-sm truncate", "{img.filename}" }
+                                    p { class: "text-white text-sm truncate", "{format_display(&img.filename)}" }
                                 }
                             }
                         }
