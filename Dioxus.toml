@@ -10,7 +10,12 @@ title = "vögeli"
 static_dir = "static"
 
 # Additional CSS style files
-style = []
+style = [
+    "/assets/styling/main.css",
+    "/assets/tailwind.css",
+    "/assets/styling/navbar.css",
+    "/assets/styling/voguguru.css"
+]
 
 # Additional JavaScript files
 script = []

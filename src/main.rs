@@ -43,8 +43,8 @@ fn App() -> Element {
     });
 
     // Ensure toast container exists in the DOM (wasm only)
+    #[cfg(target_arch = "wasm32")]
     use_effect(move || {
-        #[cfg(target_arch = "wasm32")]
         {
             if let Some(window) = web_sys::window() {
                 if let Some(document) = window.document() {
@@ -64,8 +64,8 @@ fn App() -> Element {
     rsx! {
         document::Title { "vögeli" }
         document::Link { rel: "icon", href: FAVICON }
-        document::Link { rel: "stylesheet", href: MAIN_CSS }
-        document::Link { rel: "stylesheet", href: TAILWIND_CSS }
+        // document::Link { rel: "stylesheet", href: MAIN_CSS }
+        // document::Link { rel: "stylesheet", href: TAILWIND_CSS }
 
         Router::<Route> {}
     }
