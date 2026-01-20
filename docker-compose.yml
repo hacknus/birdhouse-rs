@@ -7,4 +7,5 @@ services:
       - .env
     volumes:
       - ./public/gallery_cache:/usr/local/app/public/gallery_cache
+      - ./data:/usr/local/app/data
     restart: unless-stopped

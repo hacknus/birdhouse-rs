@@ -17,6 +17,9 @@ pub use blog::Blog;
 mod navbar;
 pub use navbar::Navbar;
 
+mod for_nerds;
+pub use for_nerds::ForNerds;
+
 mod voguguru;
 pub use voguguru::VoguGuru;
 

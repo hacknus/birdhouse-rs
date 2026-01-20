@@ -1,5 +1,12 @@
+use dashmap::DashMap;
 use dioxus::prelude::*;
-use views::{Blog, Gallery, Home, MakingOf, Navbar, VoguGuru};
+use once_cell::sync::Lazy;
+use serde::{Deserialize, Serialize};
+use uuid::Uuid;
+use views::{Blog, ForNerds, Gallery, Home, MakingOf, Navbar, VoguGuru};
+
+#[cfg(feature = "server")]
+use axum::extract::ConnectInfo;
 
 mod api;
 mod components;
@@ -8,6 +15,74 @@ mod views;
 #[cfg(feature = "server")]
 mod tcp_client;
 mod tcp_state;
+
+#[cfg(feature = "server")]
+use std::{fs, path::Path};
+
+#[cfg(feature = "server")]
+const LOCATION_FILE: &str = "data/locations.json";
+
+#[cfg(feature = "server")]
+static USER_LOCATIONS: Lazy<DashMap<Uuid, UserLocation>> = Lazy::new(DashMap::new);
+
+#[cfg(feature = "server")]
+static STORED_LOCATIONS: Lazy<DashMap<String, StoredLocation>> = Lazy::new(DashMap::new);
+
+#[derive(Serialize, Deserialize, Clone)]
+struct StoredLocation {
+    lat: f64,
+    lng: f64,
+    country: String,
+    city: String,
+}
+
+#[derive(Serialize, Deserialize, Clone)]
+struct UserLocation {
+    id: String,
+    key: String, // "<city>,<country>"
+    lat: f64,
+    lng: f64,
+    country: String,
+    city: String,
+    connected_at: i64,
+}
+
+#[derive(Deserialize, Clone)]
+struct IpGeoResponse {
+    lat: f64,
+    lon: f64,
+    country: String,
+    city: String,
+}
+
+// Messages sent over WS to the browser map
+#[derive(Serialize)]
+#[serde(tag = "type")]
+enum WsMsg {
+    #[serde(rename = "past")]
+    Past {
+        key: String,
+        lat: f64,
+        lng: f64,
+        country: String,
+        city: String,
+        past: bool, // always true; convenient for your JS
+    },
+
+    #[serde(rename = "connect")]
+    Connect {
+        id: String,
+        key: String,
+        lat: f64,
+        lng: f64,
+        country: String,
+        city: String,
+        connected_at: i64,
+    },
+
+    #[serde(rename = "disconnect")]
+    Disconnect { id: String, key: String },
+}
 
 #[derive(Debug, Clone, Routable, PartialEq)]
 #[rustfmt::skip]
@@ -24,6 +99,9 @@ enum Route {
 
         #[route("/vogu.guru")]
         VoguGuru {},
+
+        #[route("/for_nerds")]
+        ForNerds {},
 
         #[route("/blog/:id")]
         Blog { id: i32 },
@@ -42,6 +120,33 @@ const TAILWIND_CSS: Asset = asset!(
     "/assets/tailwind.css",
     AssetOptions::css().with_static_head(true)
 );
+
+#[cfg(feature = "server")]
+fn load_locations_from_disk() -> Vec<StoredLocation> {
+    match fs::read_to_string(LOCATION_FILE) {
+        Ok(data) => serde_json::from_str(&data).unwrap_or_default(),
+        Err(_) => Vec::new(),
+    }
+}
+
+#[cfg(feature = "server")]
+fn save_locations_to_disk(locations: &[StoredLocation]) {
+    use std::path::Path;
+
+    let path = Path::new(LOCATION_FILE);
+
+    if let Some(parent) = path.parent() {
+        if let Err(e) = fs::create_dir_all(parent) {
+            eprintln!("Failed to create directory {:?}: {}", parent, e);
+            return;
+        }
+    }
+
+    match fs::write(path, serde_json::to_string_pretty(locations).unwrap()) {
+        Ok(_) => println!("Saved {} locations to {:?}", locations.len(), path),
+        Err(e) => eprintln!("Failed to write locations file: {}", e),
+    }
+}
 
 #[component]
 fn App() -> Element {
@@ -81,6 +186,14 @@ fn App() -> Element {
 }
 
 #[cfg(feature = "server")]
+async fn geo_lookup(ip: &str) -> Option<IpGeoResponse> {
+    let url = format!("http://ip-api.com/json/{}", ip);
+    let resp = reqwest::get(&url).await.ok()?;
+    let geo = resp.json::<IpGeoResponse>().await.ok()?;
+    Some(geo)
+}
+
+#[cfg(feature = "server")]
 #[tokio::main]
 async fn main() {
     use api::gallery::upload_image_multipart;
@@ -92,13 +205,10 @@ async fn main() {
         response::Redirect,
         routing::get,
     };
-    use dioxus::prelude::*;
     use futures::stream;
     use influxdb2::{models::DataPoint, Client as InfluxClient};
-    use once_cell::sync::Lazy;
     use std::net::SocketAddr;
     use std::sync::atomic::{AtomicUsize, Ordering};
-    use std::sync::Arc;
     use tokio::sync::broadcast;
     use tokio::time::{interval, Duration};
     use tower_http::services::ServeDir;
@@ -106,24 +216,157 @@ async fn main() {
     static ACTIVE_USERS: Lazy<AtomicUsize> = Lazy::new(|| AtomicUsize::new(0));
 
     static TCP_BROADCAST: Lazy<broadcast::Sender<String>> = Lazy::new(|| {
-        let (tx, _) = broadcast::channel(100);
+        let (tx, _) = broadcast::channel(200);
         tx
     });
 
-    async fn tcp_websocket_handler(ws: WebSocketUpgrade) -> impl IntoResponse {
-        ws.on_upgrade(handle_tcp_socket)
+    // ---- Boot: load past locations into memory
+    {
+        let past_locations = load_locations_from_disk();
+        for loc in past_locations {
+            let key = format!("{},{}", loc.city, loc.country);
+            STORED_LOCATIONS.insert(key, loc);
+        }
+
+        let all: Vec<StoredLocation> = STORED_LOCATIONS
+            .iter()
+            .map(|e| e.value().clone())
+            .collect();
+
+        save_locations_to_disk(&all);
+
+        println!(
+            "Loaded {} past locations from disk",
+            STORED_LOCATIONS.len()
+        );
     }
 
-    async fn handle_tcp_socket(mut socket: WebSocket) {
+    async fn tcp_websocket_handler(
+        ws: WebSocketUpgrade,
+        ConnectInfo(addr): ConnectInfo<SocketAddr>,
+    ) -> impl IntoResponse {
+        ws.on_upgrade(move |socket| handle_tcp_socket(socket, addr))
+    }
+
+    async fn handle_tcp_socket(mut socket: WebSocket, addr: SocketAddr) {
+        let ip = addr.ip().to_string();
+        println!("New WS from IP: {}", ip);
+
+        let user_id = Uuid::new_v4();
+        let mut this_user: Option<UserLocation> = None;
+
+        // Resolve geo + build current user entry
+        if let Some(geo) = geo_lookup(&ip).await {
+            let key = format!("{},{}", geo.city, geo.country);
+
+            // Persist unique location if new
+            if !STORED_LOCATIONS.contains_key(&key) {
+                let stored = StoredLocation {
+                    lat: geo.lat,
+                    lng: geo.lon,
+                    country: geo.country.clone(),
+                    city: geo.city.clone(),
+                };
+                STORED_LOCATIONS.insert(key.clone(), stored);
+
+                let all: Vec<StoredLocation> = STORED_LOCATIONS
+                    .iter()
+                    .map(|e| e.value().clone())
+                    .collect();
+                save_locations_to_disk(&all);
+
+                println!("Persisted new location: {}", key);
+            }
+
+            let loc = UserLocation {
+                id: user_id.to_string(),
+                key: key.clone(),
+                lat: geo.lat,
+                lng: geo.lon,
+                country: geo.country,
+                city: geo.city,
+                connected_at: chrono::Utc::now().timestamp(),
+            };
+
+            USER_LOCATIONS.insert(user_id, loc.clone());
+            this_user = Some(loc.clone());
+
+            // Broadcast "connect" so *all* clients increment current counts
+            let msg = WsMsg::Connect {
+                id: loc.id.clone(),
+                key: loc.key.clone(),
+                lat: loc.lat,
+                lng: loc.lng,
+                country: loc.country.clone(),
+                city: loc.city.clone(),
+                connected_at: loc.connected_at,
+            };
+            let _ = TCP_BROADCAST.send(serde_json::to_string(&msg).unwrap());
+        } else {
+            // Still count as active, but won't appear on map without geo
+            println!("Geo lookup failed for IP: {}", ip);
+        }
+
         ACTIVE_USERS.fetch_add(1, Ordering::SeqCst);
         println!(
             "User connected, active users = {}",
             ACTIVE_USERS.load(Ordering::Relaxed)
         );
 
+        // Subscribe after broadcasting connect is fine; new client will also receive snapshot below.
         let mut rx = TCP_BROADCAST.subscribe();
         let mut ping = interval(Duration::from_secs(20));
 
+        // ---- On new socket: send all past locations first (gray)
+        for entry in STORED_LOCATIONS.iter() {
+            let loc = entry.value();
+            let key = format!("{},{}", loc.city, loc.country);
+            let msg = WsMsg::Past {
+                key,
+                lat: loc.lat,
+                lng: loc.lng,
+                country: loc.country.clone(),
+                city: loc.city.clone(),
+                past: true,
+            };
+
+            if socket
+                .send(axum::extract::ws::Message::Text(
+                    serde_json::to_string(&msg).unwrap().into(),
+                ))
+                .await
+                .is_err()
+            {
+                // Client gone
+                break;
+            }
+        }
+
+        // ---- Then send snapshot of currently connected users (blue)
+        for entry in USER_LOCATIONS.iter() {
+            let u = entry.value();
+            let msg = WsMsg::Connect {
+                id: u.id.clone(),
+                key: u.key.clone(),
+                lat: u.lat,
+                lng: u.lng,
+                country: u.country.clone(),
+                city: u.city.clone(),
+                connected_at: u.connected_at,
+            };
+
+            if socket
+                .send(axum::extract::ws::Message::Text(
+                    serde_json::to_string(&msg).unwrap().into(),
+                ))
+                .await
+                .is_err()
+            {
+                break;
+            }
+        }
+
+        // Main loop: ping + broadcast fanout
         loop {
             tokio::select! {
                 _ = ping.tick() => {
@@ -156,6 +399,17 @@ async fn main() {
             }
         }
 
+        // ---- Disconnect: remove from active map and notify everyone
+        if let Some(u) = this_user {
+            USER_LOCATIONS.remove(&user_id);
+
+            let msg = WsMsg::Disconnect {
+                id: u.id.clone(),
+                key: u.key.clone(),
+            };
+            let _ = TCP_BROADCAST.send(serde_json::to_string(&msg).unwrap());
+        }
+
         ACTIVE_USERS.fetch_sub(1, Ordering::SeqCst);
         println!(
             "User disconnected, active users = {}",
@@ -172,9 +426,7 @@ async fn main() {
         .trim()
         .to_string();
 
-    dbg!(&influx_token);
     let influx_bucket = std::env::var("INFLUXDB_BUCKET").expect("INFLUXDB_BUCKET not set");
-
     let influx = InfluxClient::new(influx_url, influx_org, influx_token);
 
     // Initialize TCP connection with encryption key
@@ -225,7 +477,6 @@ async fn main() {
         .unwrap_or(8080);
 
     let addr = SocketAddr::from(([0, 0, 0, 0], port));
-
     println!("Listening on http://{}", addr);
 
     let router = Router::new()
@@ -237,7 +488,10 @@ async fn main() {
         .serve_dioxus_application(ServeConfig::default(), App);
 
     let listener = tokio::net::TcpListener::bind(&addr).await.unwrap();
-    axum::serve(listener, router.into_make_service())
+    axum::serve(
+        listener,
+        router.into_make_service_with_connect_info::<SocketAddr>(),
+    )
         .await
         .unwrap();
 }

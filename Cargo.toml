@@ -43,6 +43,9 @@ futures = { version = "0.3", optional = true }
 js-sys = "0.3"
 base64 = "0.22.1"
 bytes = "1.11.0"
+reqwest = { version = "0.13", features = ["json"] }
+uuid = { version = "1.19", features = ["v4", "js", "serde"] }
+dashmap = "6.1.0"
 
 # WASM-only dependencies (only compiled for web target)
 [target.'cfg(target_arch = "wasm32")'.dependencies]
