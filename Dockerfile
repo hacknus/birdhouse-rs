@@ -1,5 +1,5 @@
 # ---------- Base build stage ----------
-FROM rust:1-bookworm AS chef
+FROM rust:1-trixie AS chef
 RUN cargo install cargo-chef
 WORKDIR /app
 
