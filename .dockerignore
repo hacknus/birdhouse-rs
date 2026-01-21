@@ -1,5 +1,9 @@
-target/
-.git/
+.git
 .gitignore
+target/
+data/
+public/gallery_cache/
+*.log
+.DS_Store
 *.md
 .env

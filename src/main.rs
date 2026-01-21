@@ -1,7 +1,10 @@
+#[cfg(feature = "server")]
+use axum::http::HeaderMap;
 use dashmap::DashMap;
 use dioxus::prelude::*;
 use once_cell::sync::Lazy;
 use serde::{Deserialize, Serialize};
+use std::net::IpAddr;
 use uuid::Uuid;
 use views::{Blog, ForNerds, Gallery, Home, MakingOf, Navbar, VoguGuru};
 
@@ -186,11 +189,33 @@ fn App() -> Element {
 }
 
 #[cfg(feature = "server")]
-async fn geo_lookup(ip: &str) -> Option<IpGeoResponse> {
+async fn geo_lookup(ip: &IpAddr) -> Option<IpGeoResponse> {
+    if is_private_ip(ip) || ip.is_loopback() {
+        println!("Skipping geo lookup for private IP: {}", ip);
+        return None;
+    }
+
     let url = format!("http://ip-api.com/json/{}", ip);
     let resp = reqwest::get(&url).await.ok()?;
     let geo = resp.json::<IpGeoResponse>().await.ok()?;
     Some(geo)
+}
+
+
+fn is_private_ip(ip: &IpAddr) -> bool {
+    match ip {
+        IpAddr::V4(v4) => {
+            v4.is_private()
+                || v4.is_loopback()
+                || v4.is_link_local()
+                || v4.is_unspecified()
+        }
+        IpAddr::V6(v6) => {
+            v6.is_loopback()
+                || v6.is_unique_local()
+                || v6.is_unspecified()
+        }
+    }
 }
 
 #[cfg(feature = "server")]
@@ -228,28 +253,48 @@ async fn main() {
             STORED_LOCATIONS.insert(key, loc);
         }
 
-        let all: Vec<StoredLocation> = STORED_LOCATIONS
-            .iter()
-            .map(|e| e.value().clone())
-            .collect();
+        let all: Vec<StoredLocation> = STORED_LOCATIONS.iter().map(|e| e.value().clone()).collect();
 
         save_locations_to_disk(&all);
 
-        println!(
-            "Loaded {} past locations from disk",
-            STORED_LOCATIONS.len()
-        );
+        println!("Loaded {} past locations from disk", STORED_LOCATIONS.len());
+    }
+
+    fn extract_real_ip(headers: &HeaderMap) -> Option<IpAddr> {
+        let candidates = [
+            "cf-connecting-ip",
+            "x-real-ip",
+            "x-forwarded-for",
+            "forwarded",
+        ];
+
+        for key in candidates {
+            if let Some(value) = headers.get(key) {
+                if let Ok(s) = value.to_str() {
+                    // X-Forwarded-For can be: client, proxy1, proxy2
+                    let first = s.split(',').next().unwrap().trim();
+                    if let Ok(ip) = first.parse::<IpAddr>() {
+                        if !is_private_ip(&ip) {
+                            return Some(ip);
+                        }
+                    }
+                }
+            }
+        }
+
+        None
     }
 
     async fn tcp_websocket_handler(
         ws: WebSocketUpgrade,
+        headers: axum::http::HeaderMap,
         ConnectInfo(addr): ConnectInfo<SocketAddr>,
     ) -> impl IntoResponse {
-        ws.on_upgrade(move |socket| handle_tcp_socket(socket, addr))
+        let ip = extract_real_ip(&headers).unwrap_or_else(|| addr.ip());
+        ws.on_upgrade(move |socket| handle_tcp_socket(socket, ip))
     }
 
-    async fn handle_tcp_socket(mut socket: WebSocket, addr: SocketAddr) {
-        let ip = addr.ip().to_string();
+    async fn handle_tcp_socket(mut socket: WebSocket, ip: IpAddr) {
         println!("New WS from IP: {}", ip);
 
         let user_id = Uuid::new_v4();
@@ -269,10 +314,8 @@ async fn main() {
                 };
                 STORED_LOCATIONS.insert(key.clone(), stored);
 
-                let all: Vec<StoredLocation> = STORED_LOCATIONS
-                    .iter()
-                    .map(|e| e.value().clone())
-                    .collect();
+                let all: Vec<StoredLocation> =
+                    STORED_LOCATIONS.iter().map(|e| e.value().clone()).collect();
                 save_locations_to_disk(&all);
 
                 println!("Persisted new location: {}", key);
@@ -492,8 +535,8 @@ async fn main() {
         listener,
         router.into_make_service_with_connect_info::<SocketAddr>(),
     )
-        .await
-        .unwrap();
+    .await
+    .unwrap();
 }
 
 #[cfg(not(feature = "server"))]
