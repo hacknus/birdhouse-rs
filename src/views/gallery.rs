@@ -459,7 +459,7 @@ async fn fetch_images() -> Result<Vec<ImageInfo>, ServerFnError> {
     {
         use std::fs;
 
-        let local_cache = "./public/gallery_cache";
+        let local_cache = "./gallery";
 
         fs::create_dir_all(local_cache)
             .map_err(|e| ServerFnError::new(format!("Failed to create cache dir: {}", e)))?;
@@ -480,7 +480,7 @@ async fn fetch_images() -> Result<Vec<ImageInfo>, ServerFnError> {
                     if let Some(filename) = path.file_name() {
                         let filename_str = filename.to_string_lossy().to_string();
                         images.push(ImageInfo {
-                            url: format!("/gallery_cache/{}", filename_str),
+                            url: format!("/gallery/{}", filename_str),
                             filename: filename_str,
                         });
                     }

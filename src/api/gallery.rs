@@ -75,7 +75,7 @@ pub async fn upload_image_multipart(mut multipart: Multipart) -> impl IntoRespon
         return (StatusCode::BAD_REQUEST, "invalid file type").into_response();
     }
 
-    let upload_dir = "./public/gallery_cache";
+    let upload_dir = "./public/gallery";
     if let Err(e) = fs::create_dir_all(upload_dir).await {
         return (StatusCode::INTERNAL_SERVER_ERROR, format!("mkdir failed: {}", e)).into_response();
     }

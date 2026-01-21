@@ -169,7 +169,11 @@ function connectWS() {
 
     socket.onclose = () => {
         console.log("Map WS closed, reconnecting...");
-        setTimeout(connectWS, 1000);
+        setTimeout(() => {
+            if (map) {
+                map.invalidateSize();
+            }
+        }, 300);
     };
 
     socket.onerror = () => {

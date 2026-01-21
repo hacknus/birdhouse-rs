@@ -528,7 +528,7 @@ async fn main() {
         .route("/voegeli", get(|| async { Redirect::temporary("/") }))
         .route("/ws/tcp", get(tcp_websocket_handler))
         //.nest_service("/assets", ServeDir::new("public/assets"))
-        //.nest_service("/gallery_cache", ServeDir::new("public/gallery_cache"))
+        .nest_service("/gallery", ServeDir::new("gallery"))
         .serve_dioxus_application(ServeConfig::default(), App);
 
     let listener = tokio::net::TcpListener::bind(&addr).await.unwrap();

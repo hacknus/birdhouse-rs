@@ -50,6 +50,8 @@ COPY encryption ./encryption
 COPY assets ./assets
 COPY public ./public
 
+RUN rm -rf ./public/gallery
+
 # ---- Build web bundle ----
 RUN dx bundle --release --platform web
 
@@ -60,6 +62,13 @@ RUN cargo build --release --features server
 FROM debian:trixie-slim AS runtime
 WORKDIR /usr/local/app
 
+# Copy web output
+COPY --from=builder /app/target/dx/birdhouse-rs/release/web/public ./public
+
+# runtime dirs for mounted volumes
+RUN mkdir -p /usr/local/app/data
+RUN mkdir -p /usr/local/app/gallery
+
 RUN apt-get update && apt-get install -y ca-certificates && rm -rf /var/lib/apt/lists/*
 
 # Copy server binary
@@ -67,8 +76,6 @@ COPY --from=builder /app/target/release/birdhouse-rs ./server
 
 # Copy web output
 COPY --from=builder /app/target/dx/birdhouse-rs/release/web/public ./public
-
-RUN mkdir -p /usr/local/app/data
 
 ENV PORT=8080
 ENV IP=0.0.0.0

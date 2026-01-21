@@ -2,7 +2,7 @@
 .gitignore
 target/
 data/
-public/gallery_cache/
+gallery/
 *.log
 .DS_Store
 *.md

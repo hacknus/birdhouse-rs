@@ -57,7 +57,7 @@ async fn save_image_to_gallery() -> Result<String, ServerFnError> {
     ))
 }
 #[server]
-async fn get_stream_config() -> Result<StreamConfig, ServerFnError> {
+pub async fn get_stream_config() -> Result<StreamConfig, ServerFnError> {
     Ok(StreamConfig {
         stream_url: std::env::var("STREAM_URL")
             .unwrap_or_else(|_| "http://127.0.0.1:8889/cam".to_string()),
@@ -67,15 +67,18 @@ async fn get_stream_config() -> Result<StreamConfig, ServerFnError> {
             .unwrap_or_else(|_| "http://localhost:3000".to_string()),
         grafana_dashboard: std::env::var("GRAFANA_DASHBOARD")
             .unwrap_or_else(|_| "ad9bp5g/voegeli".to_string()),
+        grafana_dashboard_nerds: std::env::var("GRAFANA_DASHBOARD_NERDS")
+            .unwrap_or_else(|_| "no-dashboard".to_string()),
     })
 }
 
 #[derive(Clone, serde::Serialize, serde::Deserialize)]
-struct StreamConfig {
-    stream_url: String,
-    websocket_url: String,
-    grafana_base_url: String,
-    grafana_dashboard: String,
+pub struct StreamConfig {
+    pub stream_url: String,
+    pub websocket_url: String,
+    pub grafana_base_url: String,
+    pub grafana_dashboard: String,
+    pub grafana_dashboard_nerds: String,
 }
 
 #[cfg(feature = "server")]
@@ -95,7 +98,6 @@ async fn toggle_ir_led(enabled: bool) -> Result<bool, ServerFnError> {
         .map(|_| enabled)
         .map_err(ServerFnError::new)
 }
-
 
 #[server]
 async fn get_ir_state() -> Result<bool, ServerFnError> {
@@ -305,6 +307,7 @@ pub fn Home() -> Element {
     let mut config = use_resource(|| async move { get_stream_config().await.ok() });
     let mut tcp_state = use_context::<tcp_state::TcpState>();
     let mut ir_enabled = tcp_state.ir_enabled;
+    let mut saving = use_signal(|| false);
 
     // Load initial states in background without blocking render
     use_resource(move || async move {
@@ -397,8 +400,22 @@ pub fn Home() -> Element {
                         "Save Image"
                     }
 
-                    button {
-                        class: "px-4 py-0.5 rounded-lg bg-blue-500 hover:bg-blue-600 active:bg-blue-700 transition-colors disabled:opacity-50 disabled:cursor-not-allowed",                        onclick: move |_| {
+                   button {
+                        class: format!(
+                            "px-4 py-0.5 rounded-lg transition-colors {}",
+                            if saving() {
+                                "bg-blue-500 hover:bg-blue-600 active:bg-blue-700"
+                            } else {
+                                "bg-white hover:bg-gray-200"
+                            }
+                        ),
+                        onclick: move |_| {
+                            if saving() {
+                                return;
+                            }
+
+                            saving.set(true);
+
                             spawn(async move {
                                 match save_image_to_gallery().await {
                                     Ok(msg) => {
@@ -410,8 +427,12 @@ pub fn Home() -> Element {
                                         web_sys::console::error_1(&format!("Error: {}", e).into());
                                     }
                                 }
+
+                                // Return to white
+                                saving.set(false);
                             });
                         },
+
                         img {
                             src: CAMERA_SVG,
                             class: "w-6 h-6",
