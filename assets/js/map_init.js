@@ -1,43 +1,22 @@
 let map;
-const locationMarkers = new Map(); // key -> { marker, count, activeIds: Set }
+let socket;
+
+const locationMarkers = new Map(); // key -> { marker, activeIds: Set, lastLatLng }
 const userToLocationKey = new Map(); // userId -> locationKey
 
 (function injectPastStyles() {
     const css = [
-        /* gray popup text for past locations */
-        '.leaflet-popup-content .past {',
-        '  color: #777;',
-        '}',
-        /* slightly dim current popup text a bit less */
-        '.leaflet-popup-content .current {',
-        '  color: #222;',
-        '}'
-    ].join('\n');
-    const s = document.createElement('style');
-    s.type = 'text/css';
+        ".leaflet-popup-content .past { color: #777; }",
+        ".leaflet-popup-content .current { color: #222; }",
+    ].join("\n");
+    const s = document.createElement("style");
+    s.type = "text/css";
     s.appendChild(document.createTextNode(css));
     document.head.appendChild(s);
 })();
 
-function locKeyForUser(user) {
-    if (user.city && user.city.length) {
-        // prefer city + country if available
-        return user.country ? `${user.city}, ${user.country}` : user.city;
-    }
-    // fallback: rounded coordinates to group nearby hits
-    const lat = Math.round(user.lat * 100) / 100;
-    const lng = Math.round(user.lng * 100) / 100;
-    return `${lat},${lng}`;
-}
-
-function popupHtmlForLocation(label, count, hasActive) {
-    const statusClass = hasActive ? 'current' : 'past';
-    const plural = count === 1 ? 'user' : 'users';
-    return `<div class="${statusClass}"><b>${escapeHtml(label)}</b><br/>${hasActive ? `Active users: <strong>${count}</strong>` : `Visited before`}${plural}</div>`;
-}
-
 function escapeHtml(s) {
-    return String(s || '')
+    return String(s || "")
         .replace(/&/g, "&amp;")
         .replace(/</g, "&lt;")
         .replace(/>/g, "&gt;")
@@ -45,123 +24,165 @@ function escapeHtml(s) {
         .replace(/'/g, "&#039;");
 }
 
-function createOrUpdateLocationMarker(key, latlng, isActive) {
-    const entry = locationMarkers.get(key);
-    const styleCurrent = {
-        radius: 7,
-        fillColor: "#4fc3f7",
-        color: "#4fc3f7",
-        weight: 1,
-        opacity: 1,
-        fillOpacity: 0.7
-    };
-    const stylePast = {
-        radius: 7,
-        fillColor: "#9aa0a6",
-        color: "#7f7f7f",
-        weight: 1,
-        opacity: 0.9,
-        fillOpacity: 0.6
-    };
-
-    if (entry && entry.marker) {
-        // update position and style
-        entry.marker.setLatLng(latlng);
-        entry.marker.setStyle(isActive ? styleCurrent : stylePast);
-        // update popup
-        entry.marker.setPopupContent(popupHtmlForLocation(key, entry.count, isActive));
-        entry.lastLatLng = latlng;
-        entry.isActive = isActive;
-    } else {
-        // create new aggregated marker for this location
-        const marker = L.circleMarker(latlng, isActive ? styleCurrent : stylePast).addTo(map);
-        marker.bindPopup(popupHtmlForLocation(key, 1, isActive), { closeButton: true });
-        locationMarkers.set(key, {
-            marker,
-            count: 1,
-            activeIds: new Set(),
-            lastLatLng: latlng,
-            isActive
-        });
+function popupHtml(label, activeCount) {
+    const hasActive = activeCount > 0;
+    const statusClass = hasActive ? "current" : "past";
+    if (!hasActive) {
+        return `<div class="${statusClass}"><b>${escapeHtml(label)}</b><br/>Visited before</div>`;
     }
+    const plural = activeCount === 1 ? "user" : "users";
+    return `<div class="${statusClass}"><b>${escapeHtml(label)}</b><br/>Active users: <strong>${activeCount}</strong> ${plural}</div>`;
 }
 
-function setLocationCount(key, newCount) {
-    const entry = locationMarkers.get(key);
-    if (!entry) return;
-    entry.count = newCount;
-    entry.marker.setPopupContent(popupHtmlForLocation(key, entry.count, entry.activeIds.size > 0));
-}
+const styleCurrent = {
+    radius: 7,
+    fillColor: "#4fc3f7",
+    color: "#4fc3f7",
+    weight: 1,
+    opacity: 1,
+    fillOpacity: 0.7,
+};
 
-function ensureLocationExists(key, latlng) {
-    if (!locationMarkers.has(key)) {
-        // create with default inactive style (will be updated immediately after)
-        createOrUpdateLocationMarker(key, latlng, false);
-    } else {
-        // if marker exists, ensure lastLatLng is set
-        const e = locationMarkers.get(key);
-        if (!e.lastLatLng && latlng) {
-            e.lastLatLng = latlng;
-            e.marker.setLatLng(latlng);
+const stylePast = {
+    radius: 7,
+    fillColor: "#9aa0a6",
+    color: "#7f7f7f",
+    weight: 1,
+    opacity: 0.9,
+    fillOpacity: 0.6,
+};
+
+function ensureMarker(key, latlng) {
+    let entry = locationMarkers.get(key);
+    if (entry?.marker) {
+        if (latlng) {
+            entry.marker.setLatLng(latlng);
+            entry.lastLatLng = latlng;
         }
+        return entry;
     }
+
+    const marker = L.circleMarker(latlng, stylePast).addTo(map);
+    entry = { marker, activeIds: new Set(), lastLatLng: latlng };
+    marker.bindPopup(popupHtml(key, 0), { closeButton: true });
+    locationMarkers.set(key, entry);
+    return entry;
 }
 
-function upsertFromEvent(user) {
-    // user expected to have: id, lat, lng, city, country, connected_at
-    if (!user || typeof user.id === 'undefined') return;
+function updateMarkerUi(key) {
+    const entry = locationMarkers.get(key);
+    if (!entry?.marker) return;
 
-    const id = String(user.id);
-    const latlng = [user.lat, user.lng];
-    const key = locKeyForUser(user);
+    const activeCount = entry.activeIds.size;
+    entry.marker.setStyle(activeCount > 0 ? styleCurrent : stylePast);
+    entry.marker.setPopupContent(popupHtml(key, activeCount));
+}
 
-    // If this user was previously mapped to a different key, remove from that previous location's active set
-    const previousKey = userToLocationKey.get(id);
-    if (previousKey && previousKey !== key) {
-        const prev = locationMarkers.get(previousKey);
+function handlePast(msg) {
+    // msg: { type:"past", key, lat, lng, city, country, past:true }
+    if (!msg?.key || typeof msg.lat !== "number" || typeof msg.lng !== "number") return;
+    const entry = ensureMarker(msg.key, [msg.lat, msg.lng]);
+    // past marker must never show counts
+    entry.activeIds.clear();
+    updateMarkerUi(msg.key);
+}
+
+function handleConnect(msg) {
+    // msg: { type:"connect", id, key, lat, lng, city, country, connected_at }
+    if (!msg?.id || !msg?.key || typeof msg.lat !== "number" || typeof msg.lng !== "number") return;
+
+    const id = String(msg.id);
+    const key = String(msg.key);
+    const latlng = [msg.lat, msg.lng];
+
+    // If user moved keys, remove from old
+    const prevKey = userToLocationKey.get(id);
+    if (prevKey && prevKey !== key) {
+        const prev = locationMarkers.get(prevKey);
         if (prev) {
             prev.activeIds.delete(id);
-            // update active/past style
-            prev.marker.setStyle(prev.activeIds.size > 0 ? {
-                radius: 7,
-                fillColor: "#4fc3f7",
-                color: "#4fc3f7",
-                weight: 1,
-                opacity: 1,
-                fillOpacity: 0.7
-            } : {
-                radius: 7,
-                fillColor: "#9aa0a6",
-                color: "#7f7f7f",
-                weight: 1,
-                opacity: 0.9,
-                fillOpacity: 0.6
-            });
-            // update popup text (count stays)
-            prev.marker.setPopupContent(popupHtmlForLocation(previousKey, prev.count, prev.activeIds.size > 0));
+            updateMarkerUi(prevKey);
         }
     }
 
-    // ensure aggregated marker exists
-    ensureLocationExists(key, latlng);
-
-    // mark this user as active for this key
-    const entry = locationMarkers.get(key);
+    const entry = ensureMarker(key, latlng);
     entry.activeIds.add(id);
-    entry.count = (entry.count || 0) + (previousKey === key ? 0 : 1); // increment only if this is a new association for that user
+    entry.marker.setLatLng(latlng);
+    entry.lastLatLng = latlng;
 
-    // update representative marker position to latest latlng
-    createOrUpdateLocationMarker(key, latlng, entry.activeIds.size > 0);
-
-    // store mapping
     userToLocationKey.set(id, key);
+    updateMarkerUi(key);
 }
 
+function handleDisconnect(msg) {
+    // msg: { type:"disconnect", id, key }
+    if (!msg?.id) return;
+
+    const id = String(msg.id);
+    const key = String(msg.key || userToLocationKey.get(id) || "");
+
+    if (key) {
+        const entry = locationMarkers.get(key);
+        if (entry) {
+            entry.activeIds.delete(id);
+            updateMarkerUi(key);
+        }
+    }
+
+    userToLocationKey.delete(id);
+}
+
+function connectWS() {
+    const protocol = window.location.protocol === "https:" ? "wss" : "ws";
+    const wsUrl = `${protocol}://${window.location.host}/ws/tcp?role=map`;
+
+    socket = new WebSocket(wsUrl);
+
+    socket.onopen = () => console.log("Map WS connected:", wsUrl);
+
+    socket.onmessage = (event) => {
+        let msg;
+        try {
+            msg = JSON.parse(event.data);
+        } catch {
+            return;
+        }
+
+        // your server sends WsMsg with `type`
+        switch (msg.type) {
+            case "past":
+                handlePast(msg);
+                break;
+            case "connect":
+                handleConnect(msg);
+                break;
+            case "disconnect":
+                handleDisconnect(msg);
+                break;
+            default:
+                // backward compatibility: if you ever send plain {id,lat,lng,...}
+                if (msg && typeof msg.id !== "undefined" && typeof msg.lat === "number" && typeof msg.lng === "number") {
+                    handleConnect({ ...msg, type: "connect", key: msg.key || `${msg.city},${msg.country}` });
+                }
+                break;
+        }
+    };
+
+    socket.onclose = () => {
+        console.log("Map WS closed, reconnecting...");
+        setTimeout(connectWS, 1000);
+    };
+
+    socket.onerror = () => {
+        console.warn("Map WS error, closing...");
+        try { socket.close(); } catch {}
+    };
+}
 
 function initMap() {
     const switzerlandBounds = [
         [45.817995, 5.955911],
-        [47.808464, 10.49205]
+        [47.808464, 10.49205],
     ];
 
     map = L.map("map");
@@ -169,34 +190,29 @@ function initMap() {
 
     L.tileLayer("https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png", {
         maxZoom: 19,
-        attribution: "© OpenStreetMap contributors"
+        attribution: "© OpenStreetMap contributors",
     }).addTo(map);
 
-    L.circleMarker([46.952152, 7.437860], {
+    L.circleMarker([46.952152, 7.43786], {
         radius: 10,
         fillColor: "#ff0000",
         color: "#ff0000",
         weight: 2,
         opacity: 1,
-        fillOpacity: 0.8
+        fillOpacity: 0.8,
     })
         .addTo(map)
         .bindPopup("vögeli");
 
-    setTimeout(() => {
-        map.invalidateSize();
-    }, 0);
+    setTimeout(() => map.invalidateSize(), 0);
 }
 
-
 function onReady(fn) {
-    if (document.readyState === "loading") {
-        document.addEventListener("DOMContentLoaded", fn);
-    } else {
-        fn();
-    }
+    if (document.readyState === "loading") document.addEventListener("DOMContentLoaded", fn);
+    else fn();
 }
 
 onReady(() => {
     initMap();
+    connectWS();
 });

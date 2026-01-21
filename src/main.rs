@@ -20,7 +20,10 @@ mod tcp_client;
 mod tcp_state;
 
 #[cfg(feature = "server")]
-use std::{fs, path::Path};
+use axum::extract::Query;
+use std::collections::HashMap;
+#[cfg(feature = "server")]
+use std::{fs};
 
 #[cfg(feature = "server")]
 const LOCATION_FILE: &str = "data/locations.json";
@@ -201,20 +204,12 @@ async fn geo_lookup(ip: &IpAddr) -> Option<IpGeoResponse> {
     Some(geo)
 }
 
-
 fn is_private_ip(ip: &IpAddr) -> bool {
     match ip {
         IpAddr::V4(v4) => {
-            v4.is_private()
-                || v4.is_loopback()
-                || v4.is_link_local()
-                || v4.is_unspecified()
+            v4.is_private() || v4.is_loopback() || v4.is_link_local() || v4.is_unspecified()
         }
-        IpAddr::V6(v6) => {
-            v6.is_loopback()
-                || v6.is_unique_local()
-                || v6.is_unspecified()
-        }
+        IpAddr::V6(v6) => v6.is_loopback() || v6.is_unique_local() || v6.is_unspecified(),
     }
 }
 
@@ -287,14 +282,16 @@ async fn main() {
 
     async fn tcp_websocket_handler(
         ws: WebSocketUpgrade,
-        headers: axum::http::HeaderMap,
+        Query(params): Query<HashMap<String, String>>,
+        headers: HeaderMap,
         ConnectInfo(addr): ConnectInfo<SocketAddr>,
     ) -> impl IntoResponse {
+        let role = params.get("role").cloned().unwrap_or("viewer".into());
         let ip = extract_real_ip(&headers).unwrap_or_else(|| addr.ip());
-        ws.on_upgrade(move |socket| handle_tcp_socket(socket, ip))
+        ws.on_upgrade(move |socket| handle_tcp_socket(socket, ip, role))
     }
 
-    async fn handle_tcp_socket(mut socket: WebSocket, ip: IpAddr) {
+    async fn handle_tcp_socket(mut socket: WebSocket, ip: IpAddr, role: String) {
         println!("New WS from IP: {}", ip);
 
         let user_id = Uuid::new_v4();
@@ -350,11 +347,13 @@ async fn main() {
             println!("Geo lookup failed for IP: {}", ip);
         }
 
-        ACTIVE_USERS.fetch_add(1, Ordering::SeqCst);
-        println!(
-            "User connected, active users = {}",
-            ACTIVE_USERS.load(Ordering::Relaxed)
-        );
+        if role == "viewer" {
+            ACTIVE_USERS.fetch_add(1, Ordering::SeqCst);
+            println!(
+                "User connected, active users = {}",
+                ACTIVE_USERS.load(Ordering::Relaxed)
+            );
+        }
 
         // Subscribe after broadcasting connect is fine; new client will also receive snapshot below.
         let mut rx = TCP_BROADCAST.subscribe();
@@ -453,11 +452,13 @@ async fn main() {
             let _ = TCP_BROADCAST.send(serde_json::to_string(&msg).unwrap());
         }
 
-        ACTIVE_USERS.fetch_sub(1, Ordering::SeqCst);
-        println!(
-            "User disconnected, active users = {}",
-            ACTIVE_USERS.load(Ordering::Relaxed)
-        );
+        if role == "viewer" {
+            ACTIVE_USERS.fetch_sub(1, Ordering::SeqCst);
+            println!(
+                "User disconnected, active users = {}",
+                ACTIVE_USERS.load(Ordering::Relaxed)
+            );
+        }
     }
 
     dotenv::dotenv().ok();
@@ -526,8 +527,8 @@ async fn main() {
         .route("/api/upload_image", post(upload_image_multipart))
         .route("/voegeli", get(|| async { Redirect::temporary("/") }))
         .route("/ws/tcp", get(tcp_websocket_handler))
-        .nest_service("/assets", ServeDir::new("public/assets"))
-        .nest_service("/gallery_cache", ServeDir::new("public/gallery_cache"))
+        //.nest_service("/assets", ServeDir::new("public/assets"))
+        //.nest_service("/gallery_cache", ServeDir::new("public/gallery_cache"))
         .serve_dioxus_application(ServeConfig::default(), App);
 
     let listener = tokio::net::TcpListener::bind(&addr).await.unwrap();
