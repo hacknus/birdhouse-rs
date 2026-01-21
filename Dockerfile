@@ -68,8 +68,7 @@ COPY --from=builder /app/target/release/birdhouse-rs ./server
 # Copy web output
 COPY --from=builder /app/target/dx/birdhouse-rs/release/web/public ./public
 
-# Copy runtime data
-COPY --from=builder /app/data ./data
+RUN mkdir -p /usr/local/app/data
 
 ENV PORT=8080
 ENV IP=0.0.0.0
