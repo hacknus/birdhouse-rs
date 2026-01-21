@@ -28,10 +28,9 @@ function popupHtml(label, activeCount) {
     const hasActive = activeCount > 0;
     const statusClass = hasActive ? "current" : "past";
     if (!hasActive) {
-        return `<div class="${statusClass}"><b>${escapeHtml(label)}</b><br/>Visited before</div>`;
+        return `<div class="${statusClass}"><b>${escapeHtml(label)}</b></div>`;
     }
-    const plural = activeCount === 1 ? "user" : "users";
-    return `<div class="${statusClass}"><b>${escapeHtml(label)}</b><br/>Active users: <strong>${activeCount}</strong> ${plural}</div>`;
+    return `<div class="${statusClass}"><b>${escapeHtml(label)}</b><br/>Online</div>`;
 }
 
 const styleCurrent = {
