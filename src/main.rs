@@ -23,7 +23,7 @@ mod tcp_state;
 use axum::extract::Query;
 use std::collections::HashMap;
 #[cfg(feature = "server")]
-use std::{fs};
+use std::fs;
 
 #[cfg(feature = "server")]
 const LOCATION_FILE: &str = "data/locations.json";
@@ -45,7 +45,7 @@ struct StoredLocation {
 #[derive(Serialize, Deserialize, Clone)]
 struct UserLocation {
     id: String,
-    key: String, // "<city>,<country>"
+    key: String, // "<lat>,<long>"
     lat: f64,
     lng: f64,
     country: String,
@@ -244,7 +244,7 @@ async fn main() {
     {
         let past_locations = load_locations_from_disk();
         for loc in past_locations {
-            let key = format!("{},{}", loc.city, loc.country);
+            let key = format!("{},{}", loc.lat, loc.lng);
             STORED_LOCATIONS.insert(key, loc);
         }
 
@@ -299,7 +299,7 @@ async fn main() {
 
         // Resolve geo + build current user entry
         if let Some(geo) = geo_lookup(&ip).await {
-            let key = format!("{},{}", geo.city, geo.country);
+            let key = format!("{},{}", geo.lat, geo.lon);
 
             // Persist unique location if new
             if !STORED_LOCATIONS.contains_key(&key) {
@@ -315,7 +315,7 @@ async fn main() {
                     STORED_LOCATIONS.iter().map(|e| e.value().clone()).collect();
                 save_locations_to_disk(&all);
 
-                println!("Persisted new location: {}", key);
+                println!("Persisted new location: {}/{}", geo.city, geo.country);
             }
 
             let loc = UserLocation {
@@ -362,7 +362,7 @@ async fn main() {
         // ---- On new socket: send all past locations first (gray)
         for entry in STORED_LOCATIONS.iter() {
             let loc = entry.value();
-            let key = format!("{},{}", loc.city, loc.country);
+            let key = format!("{},{}", loc.lat, loc.lng);
             let msg = WsMsg::Past {
                 key,
                 lat: loc.lat,
