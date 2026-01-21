@@ -63,8 +63,8 @@ function ensureMarker(key, latlng) {
     }
 
     const marker = L.circleMarker(latlng, stylePast).addTo(map);
-    entry = { marker, activeIds: new Set(), lastLatLng: latlng };
-    marker.bindPopup(popupHtml(key, 0), { closeButton: true });
+    entry = {marker, activeIds: new Set(), lastLatLng: latlng};
+    marker.bindPopup(popupHtml(key, 0), {closeButton: true});
     locationMarkers.set(key, entry);
     return entry;
 }
@@ -162,7 +162,7 @@ function connectWS() {
             default:
                 // backward compatibility: if you ever send plain {id,lat,lng,...}
                 if (msg && typeof msg.id !== "undefined" && typeof msg.lat === "number" && typeof msg.lng === "number") {
-                    handleConnect({ ...msg, type: "connect", key: msg.key || `${msg.city},${msg.country}` });
+                    handleConnect({...msg, type: "connect", key: msg.key || `${msg.city},${msg.country}`});
                 }
                 break;
         }
@@ -175,7 +175,10 @@ function connectWS() {
 
     socket.onerror = () => {
         console.warn("Map WS error, closing...");
-        try { socket.close(); } catch {}
+        try {
+            socket.close();
+        } catch {
+        }
     };
 }
 
@@ -186,7 +189,7 @@ function initMap() {
     ];
 
     map = L.map("map");
-    map.fitBounds(switzerlandBounds, { padding: [20, 20] });
+    map.fitBounds(switzerlandBounds, {padding: [20, 20]});
 
     L.tileLayer("https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png", {
         maxZoom: 19,
@@ -204,15 +207,20 @@ function initMap() {
         .addTo(map)
         .bindPopup("vögeli");
 
-    setTimeout(() => map.invalidateSize(), 0);
+    setTimeout(() => map.invalidateSize(), 100);
 }
 
-function onReady(fn) {
-    if (document.readyState === "loading") document.addEventListener("DOMContentLoaded", fn);
-    else fn();
-}
+window.__map_initialized = false;
 
-onReady(() => {
+window.initLeafletMap = function () {
+    if (window.__map_initialized) return;
+    window.__map_initialized = true;
+
     initMap();
     connectWS();
-});
+
+    // Critical: force correct sizing after layout
+    setTimeout(() => {
+        if (map) map.invalidateSize();
+    }, 100);
+};
