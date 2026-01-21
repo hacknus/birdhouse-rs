@@ -6,9 +6,10 @@ WORKDIR /app
 # ---------- Planner stage ----------
 FROM chef AS planner
 
-# Copy only dependency manifests
 COPY Cargo.toml Cargo.lock ./
-COPY encryption/Cargo.toml encryption/Cargo.lock ./encryption/
+COPY Dioxus.toml ./
+COPY src ./src
+COPY encryption ./encryption
 
 RUN cargo chef prepare --recipe-path recipe.json
 
@@ -23,6 +24,9 @@ RUN apt-get update && apt-get install -y \
     curl \
     && rm -rf /var/lib/apt/lists/*
 
+# Copy path dependencies (REQUIRED for cargo-chef)
+COPY encryption ./encryption
+
 # Copy dependency recipe
 COPY --from=planner /app/recipe.json recipe.json
 
@@ -36,6 +40,41 @@ RUN curl -L --proto '=https' --tlsv1.2 -sSf \
 RUN cargo binstall dioxus-cli --root /.cargo -y --force
 ENV PATH="/.cargo/bin:$PATH"
 
-# ---- Copy web assets (only affects dx bundle) ----
+# ---- Copy app source (invalidates only when code changes) ----
+COPY Cargo.toml Cargo.lock ./
+COPY Dioxus.toml ./
+COPY src ./src
+COPY encryption ./encryption
+
+# ---- Copy assets (only affects dx bundle layer) ----
 COPY assets ./assets
-COPY public ./
+COPY public ./public
+
+# ---- Build web bundle ----
+RUN dx bundle --release --platform web
+
+# ---- Build server ----
+RUN cargo build --release --features server
+
+# ---------- Runtime stage ----------
+FROM debian:trixie-slim AS runtime
+WORKDIR /usr/local/app
+
+RUN apt-get update && apt-get install -y ca-certificates && rm -rf /var/lib/apt/lists/*
+
+# Copy server binary
+COPY --from=builder /app/target/release/birdhouse-rs ./server
+
+# Copy web output
+COPY --from=builder /app/target/dx/birdhouse-rs/release/web/public ./public
+
+# Copy runtime data
+COPY --from=builder /app/data ./data
+
+ENV PORT=8080
+ENV IP=0.0.0.0
+ENV RUST_BACKTRACE=1
+
+EXPOSE 8080
+
+ENTRYPOINT ["./server"]
