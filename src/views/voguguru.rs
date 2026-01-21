@@ -68,7 +68,11 @@ pub fn VoguGuru() -> Element {
 
         div {
             class: "aarewasser",
-            style: "background-image: url('{PATTERN_HOCH}'); --pattern-quer: url('{PATTERN_QUER}');",
+            style: format!(
+                "background-image: url({}); --pattern-quer: url({});",
+                PATTERN_HOCH,
+                PATTERN_QUER
+            ),
             div { class: "container text-center mt-5",
                 match &*guru_data.read_unchecked() {
                     Some(Ok(data)) => rsx! {

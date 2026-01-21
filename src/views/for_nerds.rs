@@ -1,9 +1,9 @@
 use crate::Route;
 use dioxus::prelude::*;
 
-const MAP_CSS: Asset = asset!("/assets/leaflet/leaflet.css");
-const MAP_JS: Asset = asset!("/assets/leaflet/leaflet.js");
-const MAP_INIT_JS: Asset = asset!("/assets/js/map_init.js");
+const MAP_CSS: Asset = asset!("/assets/leaflet/leaflet.css",);
+const MAP_JS: Asset = asset!("/assets/leaflet/leaflet.js",);
+const MAP_INIT_JS: Asset = asset!("/assets/js/map_init.js",);
 
 #[component]
 pub fn ForNerds() -> Element {
@@ -16,7 +16,10 @@ pub fn ForNerds() -> Element {
                 class: "w-full flex flex-col items-center gap-6 px-4",
                 style: "--content-width: min(100%, 1280px); --map-height: calc(var(--content-width) * 9 / 16);",
 
-                h1 { "User Location Map" }
+                h1 {
+                    class: "mt-6 text-2xl",
+                    "User Location Map"
+                }
 
                 div {
                     id: "map-wrapper",
