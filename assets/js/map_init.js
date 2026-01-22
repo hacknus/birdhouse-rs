@@ -63,8 +63,8 @@ function ensureMarker(key, latlng, label) {
     }
 
     const marker = L.circleMarker(latlng, stylePast).addTo(map);
-    entry = {marker, activeIds: new Set(), lastLatLng: latlng, label};
-    marker.bindPopup(popupHtml(label || key, 0), {closeButton: true});
+    entry = { marker, activeIds: new Set(), lastLatLng: latlng, label };
+    marker.bindPopup(popupHtml(label || key, 0), { closeButton: true });
     locationMarkers.set(key, entry);
     return entry;
 }
@@ -169,12 +169,7 @@ function connectWS() {
             default:
                 // backward compatibility: if you ever send plain {id,lat,lng,...}
                 if (msg && typeof msg.id !== "undefined" && typeof msg.lat === "number" && typeof msg.lng === "number") {
-                    handleConnect({
-                        ...msg,
-                        type: "connect",
-                        key: msg.key,
-                        city: msg.city || "Unknown"
-                    });
+                    handleConnect({...msg, type: "connect", key: msg.key || `${msg.city},${msg.country}`});
                 }
                 break;
         }

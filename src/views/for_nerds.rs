@@ -68,9 +68,8 @@ pub fn ForNerds() -> Element {
 
             // DASHBOARD
             div {
-                style: "width: var(--content-width); aspect-ratio: 16 / 9;",
-                class: "rounded-lg shadow-lg overflow-hidden bg-white",
-
+                style: "width: var(--content-width);",
+                class: "rounded-lg shadow-lg overflow-hidden bg-white aspect-video md:aspect-video h-[80vh] md:h-auto",
                 iframe {
                     src: grafana_url,
                     style: "width: 100%; height: 100%; border: none;",
