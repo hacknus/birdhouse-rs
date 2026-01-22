@@ -51,19 +51,20 @@ const stylePast = {
     fillOpacity: 0.6,
 };
 
-function ensureMarker(key, latlng) {
+function ensureMarker(key, latlng, label) {
     let entry = locationMarkers.get(key);
     if (entry?.marker) {
         if (latlng) {
             entry.marker.setLatLng(latlng);
             entry.lastLatLng = latlng;
         }
+        if (label) entry.label = label;
         return entry;
     }
 
     const marker = L.circleMarker(latlng, stylePast).addTo(map);
-    entry = {marker, activeIds: new Set(), lastLatLng: latlng};
-    marker.bindPopup(popupHtml(key, 0), {closeButton: true});
+    entry = {marker, activeIds: new Set(), lastLatLng: latlng, label};
+    marker.bindPopup(popupHtml(label || key, 0), {closeButton: true});
     locationMarkers.set(key, entry);
     return entry;
 }
@@ -73,14 +74,19 @@ function updateMarkerUi(key) {
     if (!entry?.marker) return;
 
     const activeCount = entry.activeIds.size;
+    const label = entry.label || key;
+
     entry.marker.setStyle(activeCount > 0 ? styleCurrent : stylePast);
-    entry.marker.setPopupContent(popupHtml(key, activeCount));
+    entry.marker.setPopupContent(popupHtml(label, activeCount));
 }
 
 function handlePast(msg) {
     // msg: { type:"past", key, lat, lng, city, country, past:true }
     if (!msg?.key || typeof msg.lat !== "number" || typeof msg.lng !== "number") return;
-    const entry = ensureMarker(msg.key, [msg.lat, msg.lng]);
+
+    const label = msg.city || msg.key;
+    const entry = ensureMarker(msg.key, [msg.lat, msg.lng], label);
+
     // past marker must never show counts
     entry.activeIds.clear();
     updateMarkerUi(msg.key);
@@ -104,7 +110,9 @@ function handleConnect(msg) {
         }
     }
 
-    const entry = ensureMarker(key, latlng);
+    const label = msg.city || key;
+    const entry = ensureMarker(key, latlng, label);
+
     entry.activeIds.add(id);
     entry.marker.setLatLng(latlng);
     entry.lastLatLng = latlng;
@@ -161,7 +169,12 @@ function connectWS() {
             default:
                 // backward compatibility: if you ever send plain {id,lat,lng,...}
                 if (msg && typeof msg.id !== "undefined" && typeof msg.lat === "number" && typeof msg.lng === "number") {
-                    handleConnect({...msg, type: "connect", key: msg.key || `${msg.city},${msg.country}`});
+                    handleConnect({
+                        ...msg,
+                        type: "connect",
+                        key: msg.key,
+                        city: msg.city || "Unknown"
+                    });
                 }
                 break;
         }
