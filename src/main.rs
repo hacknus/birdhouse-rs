@@ -14,7 +14,7 @@ use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use std::net::IpAddr;
 use uuid::Uuid;
-use views::{Blog, ForNerds, Gallery, Home, MakingOf, Navbar, VoguGuru};
+use views::{ForNerds, Gallery, Home, MakingOf, Navbar, VoguGuru};
 
 mod api;
 mod components;
@@ -120,9 +120,6 @@ enum Route {
 
         #[route("/for_nerds")]
         ForNerds {},
-
-        #[route("/blog/:id")]
-        Blog { id: i32 },
 }
 
 const FAVICON: Asset = asset!("/assets/favicon.ico");
