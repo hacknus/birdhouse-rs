@@ -1,5 +1,11 @@
+#[cfg(feature = "server")]
+use crate::CURRENT_TEMPERATURE;
+#[cfg(feature = "server")]
+use crate::TEMPERATURE_BERN;
 use dioxus::prelude::*;
+use rand::seq::IndexedRandom;
 use serde::{Deserialize, Serialize};
+use std::io;
 
 const VOGUGURU_CSS: Asset = asset!(
     "/assets/styling/voguguru.css",
@@ -20,15 +26,46 @@ struct GuruData {
 
 #[server]
 async fn get_guru_data() -> Result<GuruData, ServerFnError> {
-    use rand::Rng;
-    let mut rng = rand::thread_rng();
+    let bern_temp: Option<f64> = {
+        let lock = TEMPERATURE_BERN.read().unwrap();
+        *lock
+    };
 
-    let temp_value = rng.gen_range(15.0..25.0);
-    let temp_bern = rng.gen_range(15.0..25.0);
+    let current_temp: Option<f64> = {
+        let lock = CURRENT_TEMPERATURE.read().unwrap();
+        *lock
+    };
+
+    if let Ok(file) = std::fs::File::open("data/phrases.json") {
+        let json: serde_json::Value =
+            serde_json::from_reader(file).expect("file should be proper JSON");
+        for (key, val) in json.as_object().iter().flat_map(|d| d.iter()) {
+            let limits = key.split("..").collect::<Vec<&str>>();
+            if let Some(t) = current_temp {
+                if limits[0].parse::<f64>().unwrap() < t && t <= limits[1].parse::<f64>().unwrap() {
+                    if let Some(phrase) = val.as_array().unwrap().choose(&mut rand::rng()) {
+                        return Ok(GuruData {
+                            temperature_value: current_temp
+                                .map(|t| format!("{:.1}", t))
+                                .unwrap_or_else(|| "—".to_string()),
+                            temperature_bern: bern_temp
+                                .map(|t| format!("{:.1}", t))
+                                .unwrap_or_else(|| "—".to_string()),
+                            phrase: phrase.to_string().replace("\"", ""),
+                        });
+                    }
+                }
+            }
+        }
+    }
 
     Ok(GuruData {
-        temperature_value: format!("{:.1}", temp_value),
-        temperature_bern: format!("{:.1}", temp_bern),
+        temperature_value: current_temp
+            .map(|t| format!("{:.1}", t))
+            .unwrap_or_else(|| "—".to_string()),
+        temperature_bern: bern_temp
+            .map(|t| format!("{:.1}", t))
+            .unwrap_or_else(|| "—".to_string()),
         phrase: "Perfekt für e Sprung!".to_string(),
     })
 }

@@ -1,15 +1,20 @@
 #[cfg(feature = "server")]
+use axum::extract::ConnectInfo;
+#[cfg(feature = "server")]
 use axum::http::HeaderMap;
 use dashmap::DashMap;
 use dioxus::prelude::*;
+#[cfg(feature = "server")]
+use influxdb2::models::Query as InfluxQuery;
+#[cfg(feature = "server")]
+use influxdb2::FromDataPoint;
+#[cfg(feature = "server")]
 use once_cell::sync::Lazy;
 use serde::{Deserialize, Serialize};
+use serde_json::Value;
 use std::net::IpAddr;
 use uuid::Uuid;
 use views::{Blog, ForNerds, Gallery, Home, MakingOf, Navbar, VoguGuru};
-
-#[cfg(feature = "server")]
-use axum::extract::ConnectInfo;
 
 mod api;
 mod components;
@@ -24,9 +29,16 @@ use axum::extract::Query;
 use std::collections::HashMap;
 #[cfg(feature = "server")]
 use std::fs;
+use std::sync::RwLock;
 
 #[cfg(feature = "server")]
 const LOCATION_FILE: &str = "data/locations.json";
+
+#[cfg(feature = "server")]
+pub static TEMPERATURE_BERN: Lazy<RwLock<Option<f64>>> = Lazy::new(|| RwLock::new(None));
+
+#[cfg(feature = "server")]
+pub static CURRENT_TEMPERATURE: Lazy<RwLock<Option<f64>>> = Lazy::new(|| RwLock::new(None));
 
 #[cfg(feature = "server")]
 static USER_LOCATIONS: Lazy<DashMap<Uuid, UserLocation>> = Lazy::new(DashMap::new);
@@ -227,11 +239,14 @@ async fn main() {
     };
     use futures::stream;
     use influxdb2::{models::DataPoint, Client as InfluxClient};
+    use once_cell::sync::Lazy;
     use std::net::SocketAddr;
     use std::sync::atomic::{AtomicUsize, Ordering};
     use tokio::sync::broadcast;
     use tokio::time::{interval, Duration};
     use tower_http::services::ServeDir;
+
+    dotenv::dotenv().ok();
 
     static ACTIVE_USERS: Lazy<AtomicUsize> = Lazy::new(|| AtomicUsize::new(0));
 
@@ -239,6 +254,187 @@ async fn main() {
         let (tx, _) = broadcast::channel(200);
         tx
     });
+
+    #[cfg(feature = "server")]
+    pub async fn get_access_token() -> Option<String> {
+        use base64::{engine::general_purpose, Engine as _};
+
+        let client_id = std::env::var("CLIENT_ID").ok()?;
+        let client_secret = std::env::var("CLIENT_SECRET").ok()?;
+
+        let credentials = format!("{}:{}", client_id, client_secret);
+        let encoded = general_purpose::STANDARD.encode(credentials);
+
+        let url = "https://api.srgssr.ch/oauth/v1/accesstoken?grant_type=client_credentials";
+
+        let client = reqwest::Client::new();
+        let res = match client
+            .post(url)
+            .header("Authorization", format!("Basic {}", encoded))
+            .header("Content-Type", "application/x-www-form-urlencoded")
+            .body("grant_type=client_credentials")
+            .send()
+            .await
+        {
+            Ok(r) => r,
+            Err(e) => {
+                eprintln!("Token request failed: {}", e);
+                return None;
+            }
+        };
+
+        let status = res.status();
+        let text = res.text().await.unwrap_or_default();
+
+        if !status.is_success() {
+            eprintln!("Token HTTP {}: {}", status, text);
+            return None;
+        }
+
+        let json: serde_json::Value = match serde_json::from_str(&text) {
+            Ok(j) => j,
+            Err(e) => {
+                eprintln!("Token JSON parse failed: {}", e);
+                return None;
+            }
+        };
+
+        let token = json.get("access_token")?.as_str()?.to_string();
+        println!("Got access token");
+        Some(token)
+    }
+
+    #[cfg(feature = "server")]
+    async fn fetch_current_temperature(client: &influxdb2::Client, bucket: &str) -> Option<f64> {
+        let flux = format!(
+            r#"
+                from(bucket: "{bucket}")
+                  |> range(start: -24h)
+                  |> filter(fn: (r) => r._measurement == "voegeli")
+                  |> filter(fn: (r) => r._field == "inside_temperature")
+                  |> last()
+                "#,
+            bucket = bucket
+        );
+
+        client.query_suggestions().await.ok();
+        client.query_suggestions_name("some-name").await.ok();
+
+        #[derive(FromDataPoint)]
+        struct Measurement {
+            value: f64,
+        }
+        impl Default for Measurement {
+            fn default() -> Self {
+                Self { value: 0f64 }
+            }
+        }
+
+        let rows = client
+            .query::<Measurement>(Some(InfluxQuery::new(flux)))
+            .await
+            .expect("Query failed");
+
+        let latest_value = rows.into_iter().next().map(|m| m.value);
+        latest_value
+    }
+
+    #[cfg(feature = "server")]
+    pub async fn get_weather_forecast(token: &str, geolocation_id: &str) -> Option<f64> {
+        let url = format!(
+            "https://api.srgssr.ch/srf-meteo/v2/forecastpoint/{}",
+            geolocation_id
+        );
+
+        let client = reqwest::Client::new();
+        let res = match client
+            .get(url)
+            .header("Authorization", format!("Bearer {}", token))
+            .send()
+            .await
+        {
+            Ok(r) => r,
+            Err(e) => {
+                eprintln!("Weather request failed: {}", e);
+                return None;
+            }
+        };
+
+        let status = res.status();
+        let text = res.text().await.unwrap_or_default();
+
+        if !status.is_success() {
+            eprintln!("Weather HTTP {}: {}", status, text);
+            return None;
+        }
+
+        let json: serde_json::Value = match serde_json::from_str(&text) {
+            Ok(j) => j,
+            Err(e) => {
+                eprintln!("Weather JSON parse failed: {}", e);
+                return None;
+            }
+        };
+
+        let hours = json.get("hours")?.as_array()?;
+
+        use chrono::{Timelike, Utc};
+
+        let now = Utc::now();
+        let mut best: Option<(chrono::DateTime<Utc>, f64)> = None;
+
+        for entry in hours {
+            let dt = entry.get("date_time")?.as_str()?;
+            let parsed = chrono::DateTime::parse_from_rfc3339(dt)
+                .ok()?
+                .with_timezone(&Utc);
+
+            if parsed > now {
+                if let Some(temp) = entry.get("TTT_C")?.as_f64() {
+                    match best {
+                        Some((best_time, _)) if parsed >= best_time => {}
+                        _ => best = Some((parsed, temp)),
+                    }
+                }
+            }
+        }
+
+        if let Some((t, temp)) = best {
+            println!("Closest forecast @ {} = {}", t, temp);
+            return Some(temp);
+        }
+
+        eprintln!("No future forecast entries found");
+        None
+    }
+
+    #[cfg(feature = "server")]
+    {
+        tokio::spawn(async {
+            let geolocation_id = "46.9548,7.4320"; // Bern
+
+            loop {
+                match get_access_token().await {
+                    Some(token) => match get_weather_forecast(&token, geolocation_id).await {
+                        Some(temp) => {
+                            let mut lock = TEMPERATURE_BERN.write().unwrap();
+                            *lock = Some(temp);
+                            println!("Updated Bern temperature: {}", temp);
+                        }
+                        None => {
+                            eprintln!("Failed to get weather forecast");
+                        }
+                    },
+                    None => {
+                        eprintln!("Failed to get access token");
+                    }
+                }
+
+                // Update every 1 hour
+                tokio::time::sleep(std::time::Duration::from_secs(3600)).await;
+            }
+        });
+    }
 
     // ---- Boot: load past locations into memory
     {
@@ -461,17 +657,37 @@ async fn main() {
         }
     }
 
-    dotenv::dotenv().ok();
-
     let influx_url = std::env::var("INFLUXDB_URL").expect("INFLUXDB_URL not set");
     let influx_org = std::env::var("INFLUXDB_ORG").expect("INFLUXDB_ORG not set");
-    let influx_token = std::env::var("INFLUXDB_WRITE_TOKEN")
-        .expect("INFLUXDB_WRITE_TOKEN not set")
+    let influx_token = std::env::var("INFLUXDB_TOKEN")
+        .expect("INFLUXDB_TOKEN not set")
         .trim()
         .to_string();
 
     let influx_bucket = std::env::var("INFLUXDB_BUCKET").expect("INFLUXDB_BUCKET not set");
     let influx = InfluxClient::new(influx_url, influx_org, influx_token);
+
+    #[cfg(feature = "server")]
+    {
+        let influx = influx.clone();
+        let bucket = influx_bucket.clone();
+
+        tokio::spawn(async move {
+            loop {
+                match fetch_current_temperature(&influx, &bucket).await {
+                    Some(temp) => {
+                        *CURRENT_TEMPERATURE.write().unwrap() = Some(temp);
+                        println!("Updated CURRENT_TEMPERATURE from Influx: {}", temp);
+                    }
+                    None => {
+                        eprintln!("Failed to read inside_temperature from Influx");
+                    }
+                }
+
+                tokio::time::sleep(std::time::Duration::from_secs(30)).await;
+            }
+        });
+    }
 
     // Initialize TCP connection with encryption key
     if let (Ok(tcp_addr), Ok(tcp_key)) = (

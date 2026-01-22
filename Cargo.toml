@@ -20,7 +20,6 @@ http = { version = "1.4.0", optional = true }
 tokio = { version = "1", features = ["full"], optional = true }
 tower = { version = "0.5", optional = true }
 tower-http = { version = "0.6", features = ["fs"], optional = true }
-influxdb = { version = "0.7.2", optional = true }
 gloo-timers = "0.3.0"
 serde_json = "1.0.148"
 web-sys = { version = "0.3", features = [
@@ -39,6 +38,8 @@ web-sys = { version = "0.3", features = [
 ] }
 wasm-bindgen = { version = "0.2.106", optional = true }
 influxdb2 = { version = "0.5", optional = true }
+influxdb2-derive = { version = "0.1", optional = true }
+influxdb2-structmap = { version = "0.2", optional = true }
 futures = { version = "0.3", optional = true }
 js-sys = "0.3"
 base64 = "0.22.1"
@@ -46,6 +47,7 @@ bytes = "1.11.0"
 reqwest = { version = "0.13", features = ["json"] }
 uuid = { version = "1.19", features = ["v4", "js", "serde"] }
 dashmap = "6.1.0"
+num-traits = "0.2"
 
 # WASM-only dependencies (only compiled for web target)
 [target.'cfg(target_arch = "wasm32")'.dependencies]
@@ -65,8 +67,9 @@ server = [
     "dep:tokio",
     "dep:tower",
     "dep:tower-http",
-    "dep:influxdb",
     "dep:wasm-bindgen",
     "dep:influxdb2",
+    "dep:influxdb2-derive",
+    "dep:influxdb2-structmap",
     "dep:futures",
 ]
