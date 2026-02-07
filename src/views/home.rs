@@ -316,20 +316,6 @@ pub fn Home() -> Element {
         }
     });
 
-    #[cfg(target_arch = "wasm32")]
-    {
-        let mut tcp_initialized = use_signal(|| false);
-        use_effect(move || {
-            if !tcp_initialized() && !*tcp_state.ws_connected.read() {
-                spawn(async move {
-                    // gloo_timers::future::sleep(std::time::Duration::from_millis(500)).await;
-                    tcp_state.init_websocket();
-                });
-                tcp_initialized.set(true);
-            }
-        });
-    }
-
     let config_value = config.read();
     let Some(Some(cfg)) = config_value.as_ref() else {
         return rsx! {

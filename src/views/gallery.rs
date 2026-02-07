@@ -480,7 +480,7 @@ async fn fetch_images() -> Result<Vec<ImageInfo>, ServerFnError> {
                     if let Some(filename) = path.file_name() {
                         let filename_str = filename.to_string_lossy().to_string();
                         images.push(ImageInfo {
-                            url: format!("/gallery/{}", filename_str),
+                            url: format!("/gallery-assets/{}", filename_str),
                             filename: filename_str,
                         });
                     }
