@@ -1,4 +1,3 @@
-use crate::Route;
 use dioxus::prelude::*;
 
 use crate::views::home::get_stream_config;
@@ -10,7 +9,7 @@ const MAP_JS: Asset = asset!("/assets/leaflet/leaflet.js",);
 const MAP_INIT_JS: Asset = asset!("/assets/js/map_init.js",);
 #[component]
 pub fn ForNerds() -> Element {
-    let mut config = use_resource(|| async move { get_stream_config().await.ok() });
+    let config = use_resource(|| async move { get_stream_config().await.ok() });
 
     let config_value = config.read();
     let Some(Some(cfg)) = config_value.as_ref() else {

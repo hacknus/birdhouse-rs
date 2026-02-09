@@ -2,6 +2,7 @@
 use axum::extract::ConnectInfo;
 #[cfg(feature = "server")]
 use axum::http::HeaderMap;
+#[cfg(feature = "server")]
 use dashmap::DashMap;
 use dioxus::prelude::*;
 #[cfg(feature = "server")]
@@ -11,8 +12,8 @@ use influxdb2::FromDataPoint;
 #[cfg(feature = "server")]
 use once_cell::sync::Lazy;
 use serde::{Deserialize, Serialize};
-use serde_json::Value;
 use std::net::IpAddr;
+#[cfg(feature = "server")]
 use uuid::Uuid;
 use views::{ForNerds, Gallery, Home, MakingOf, Navbar, VoguGuru};
 
@@ -26,9 +27,11 @@ mod tcp_state;
 
 #[cfg(feature = "server")]
 use axum::extract::Query;
+#[cfg(feature = "server")]
 use std::collections::HashMap;
 #[cfg(feature = "server")]
 use std::fs;
+#[cfg(feature = "server")]
 use std::sync::RwLock;
 
 #[cfg(feature = "server")]
@@ -176,7 +179,7 @@ fn save_locations_to_disk(locations: &[StoredLocation]) {
     }
 }
 
-    #[component]
+#[component]
 fn App() -> Element {
     let mut tcp_state = use_context_provider(|| tcp_state::TcpState::new());
 
@@ -317,7 +320,11 @@ async fn main() {
     }
 
     #[cfg(feature = "server")]
-    async fn fetch_current_temperature(client: &influxdb2::Client, bucket: &str, field: &str) -> Option<f64> {
+    async fn fetch_current_temperature(
+        client: &influxdb2::Client,
+        bucket: &str,
+        field: &str,
+    ) -> Option<f64> {
         let flux = format!(
             r#"
                 from(bucket: "{bucket}")
@@ -581,8 +588,7 @@ async fn main() {
             counted_viewer = true;
             println!(
                 "User connected, active users = {} (session_id={}, connections={})",
-                ACTIVE_USERS.load(Ordering::Relaxed)
-                ,
+                ACTIVE_USERS.load(Ordering::Relaxed),
                 session_id,
                 entry.connections
             );
@@ -779,8 +785,7 @@ async fn main() {
             }
             println!(
                 "User disconnected, active users = {} (session_id={})",
-                ACTIVE_USERS.load(Ordering::Relaxed)
-                ,
+                ACTIVE_USERS.load(Ordering::Relaxed),
                 session_id
             );
         }

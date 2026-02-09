@@ -17,7 +17,6 @@ pub fn Navbar() -> Element {
         Route::MakingOf {} => "making",
         Route::VoguGuru {} => "vogu",
         Route::ForNerds {} => "nerds",
-        _ => "home",
     };
 
     rsx! {

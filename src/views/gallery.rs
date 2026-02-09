@@ -58,6 +58,7 @@ fn ImageViewer(
     on_next: EventHandler<()>,
     on_prev: EventHandler<()>,
 ) -> Element {
+    #[cfg(target_arch = "wasm32")]
     use std::time::Duration;
     use dioxus::prelude::spawn;
 

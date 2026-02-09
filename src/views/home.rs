@@ -1,8 +1,4 @@
-use dioxus::dioxus_core::Task;
-use dioxus::document::eval;
 use dioxus::prelude::*;
-#[cfg(feature = "server")]
-use std::collections::HashMap;
 #[cfg(feature = "server")]
 use std::sync::Arc;
 #[cfg(feature = "server")]
@@ -304,8 +300,8 @@ fn init_webgl_spectrogram(canvas_id: &str, ws_url: &str) -> Result<(), wasm_bind
 }
 
 pub fn Home() -> Element {
-    let mut config = use_resource(|| async move { get_stream_config().await.ok() });
-    let mut tcp_state = use_context::<tcp_state::TcpState>();
+    let config = use_resource(|| async move { get_stream_config().await.ok() });
+    let tcp_state = use_context::<tcp_state::TcpState>();
     let mut ir_enabled = tcp_state.ir_enabled;
     let mut saving = use_signal(|| false);
 
@@ -327,6 +323,7 @@ pub fn Home() -> Element {
     };
 
     let stream_url = cfg.stream_url.clone();
+    #[cfg(target_arch = "wasm32")]
     let ws_url = cfg.websocket_url.clone();
 
     #[cfg(target_arch = "wasm32")]

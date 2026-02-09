@@ -7,7 +7,6 @@ use crate::TEMPERATURE_BERN;
 use dioxus::prelude::*;
 use rand::seq::IndexedRandom;
 use serde::{Deserialize, Serialize};
-use std::io;
 
 const VOGUGURU_CSS: Asset = asset!(
     "/assets/styling/voguguru.css",
@@ -90,7 +89,7 @@ pub fn VoguGuru() -> Element {
 
     // Set up periodic refresh every 10 seconds - only start after initial load
     use_effect(move || {
-        let handle = spawn(async move {
+        let _handle = spawn(async move {
             // Wait for initial load
             #[cfg(target_arch = "wasm32")]
             gloo_timers::future::sleep(std::time::Duration::from_secs(10)).await;
