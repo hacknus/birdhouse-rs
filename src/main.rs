@@ -811,7 +811,7 @@ async fn main() {
                 match fetch_current_temperature(&influx, &bucket, "inside_temperature").await {
                     Some(temp) => {
                         *CURRENT_INSIDE_TEMPERATURE.write().unwrap() = Some(temp);
-                        println!("Updated CURRENT_TEMPERATURE from Influx: {}", temp);
+                        println!("Updated CURRENT_INSIDE_TEMPERATURE from Influx: {}", temp);
                     }
                     None => {
                         eprintln!("Failed to read inside_temperature from Influx");
@@ -821,14 +821,14 @@ async fn main() {
                 match fetch_current_temperature(&influx, &bucket, "outside_temperature").await {
                     Some(temp) => {
                         *CURRENT_OUTSIDE_TEMPERATURE.write().unwrap() = Some(temp);
-                        println!("Updated CURRENT_TEMPERATURE from Influx: {}", temp);
+                        println!("Updated CURRENT_OUTSIDE_TEMPERATURE from Influx: {}", temp);
                     }
                     None => {
                         eprintln!("Failed to read inside_temperature from Influx");
                     }
                 }
 
-                tokio::time::sleep(std::time::Duration::from_secs(30)).await;
+                tokio::time::sleep(std::time::Duration::from_secs(60)).await;
             }
         });
     }
