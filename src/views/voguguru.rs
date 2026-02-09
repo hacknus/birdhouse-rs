@@ -1,5 +1,7 @@
 #[cfg(feature = "server")]
-use crate::CURRENT_TEMPERATURE;
+use crate::CURRENT_INSIDE_TEMPERATURE;
+#[cfg(feature = "server")]
+use crate::CURRENT_OUTSIDE_TEMPERATURE;
 #[cfg(feature = "server")]
 use crate::TEMPERATURE_BERN;
 use dioxus::prelude::*;
@@ -26,26 +28,39 @@ struct GuruData {
 
 #[server]
 async fn get_guru_data() -> Result<GuruData, ServerFnError> {
-    let bern_temp: Option<f64> = {
+    let mut bern_temp: Option<f64> = {
         let lock = TEMPERATURE_BERN.read().unwrap();
         *lock
     };
 
-    let current_temp: Option<f64> = {
-        let lock = CURRENT_TEMPERATURE.read().unwrap();
+    let current_inside_temp: Option<f64> = {
+        let lock = CURRENT_INSIDE_TEMPERATURE.read().unwrap();
         *lock
     };
+
+    let current_outside_temp: Option<f64> = {
+        let lock = CURRENT_OUTSIDE_TEMPERATURE.read().unwrap();
+        *lock
+    };
+
+    let delta = if let (Some(inside), Some(outside)) = (current_inside_temp, current_outside_temp) {
+        inside - outside
+    } else {
+        0.0
+    };
+
+    bern_temp = bern_temp.map(|t| t + delta);
 
     if let Ok(file) = std::fs::File::open("data/phrases.json") {
         let json: serde_json::Value =
             serde_json::from_reader(file).expect("file should be proper JSON");
         for (key, val) in json.as_object().iter().flat_map(|d| d.iter()) {
             let limits = key.split("..").collect::<Vec<&str>>();
-            if let Some(t) = current_temp {
+            if let Some(t) = current_inside_temp {
                 if limits[0].parse::<f64>().unwrap() < t && t <= limits[1].parse::<f64>().unwrap() {
                     if let Some(phrase) = val.as_array().unwrap().choose(&mut rand::rng()) {
                         return Ok(GuruData {
-                            temperature_value: current_temp
+                            temperature_value: current_inside_temp
                                 .map(|t| format!("{:.1}", t))
                                 .unwrap_or_else(|| "—".to_string()),
                             temperature_bern: bern_temp
@@ -60,7 +75,7 @@ async fn get_guru_data() -> Result<GuruData, ServerFnError> {
     }
 
     Ok(GuruData {
-        temperature_value: current_temp
+        temperature_value: current_inside_temp
             .map(|t| format!("{:.1}", t))
             .unwrap_or_else(|| "—".to_string()),
         temperature_bern: bern_temp

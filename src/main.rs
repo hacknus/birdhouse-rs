@@ -38,10 +38,16 @@ const LOCATION_FILE: &str = "data/locations.json";
 pub static TEMPERATURE_BERN: Lazy<RwLock<Option<f64>>> = Lazy::new(|| RwLock::new(None));
 
 #[cfg(feature = "server")]
-pub static CURRENT_TEMPERATURE: Lazy<RwLock<Option<f64>>> = Lazy::new(|| RwLock::new(None));
+pub static CURRENT_INSIDE_TEMPERATURE: Lazy<RwLock<Option<f64>>> = Lazy::new(|| RwLock::new(None));
+
+#[cfg(feature = "server")]
+pub static CURRENT_OUTSIDE_TEMPERATURE: Lazy<RwLock<Option<f64>>> = Lazy::new(|| RwLock::new(None));
 
 #[cfg(feature = "server")]
 static USER_LOCATIONS: Lazy<DashMap<Uuid, UserLocation>> = Lazy::new(DashMap::new);
+
+#[cfg(feature = "server")]
+static ACTIVE_SESSIONS: Lazy<DashMap<String, SessionEntry>> = Lazy::new(DashMap::new);
 
 #[cfg(feature = "server")]
 static STORED_LOCATIONS: Lazy<DashMap<String, StoredLocation>> = Lazy::new(DashMap::new);
@@ -63,6 +69,13 @@ struct UserLocation {
     country: String,
     city: String,
     connected_at: i64,
+}
+
+#[cfg(feature = "server")]
+#[derive(Clone)]
+struct SessionEntry {
+    connections: usize,
+    last_seen: i64,
 }
 
 #[derive(Deserialize, Clone)]
@@ -163,13 +176,15 @@ fn save_locations_to_disk(locations: &[StoredLocation]) {
     }
 }
 
-#[component]
+    #[component]
 fn App() -> Element {
     let mut tcp_state = use_context_provider(|| tcp_state::TcpState::new());
 
     #[cfg(target_arch = "wasm32")]
     use_effect(move || {
-        tcp_state.init_websocket();
+        if tcp_state.ws.read().is_none() {
+            tcp_state.init_websocket();
+        }
     });
 
     // Ensure toast container exists in the DOM (wasm only)
@@ -302,13 +317,13 @@ async fn main() {
     }
 
     #[cfg(feature = "server")]
-    async fn fetch_current_temperature(client: &influxdb2::Client, bucket: &str) -> Option<f64> {
+    async fn fetch_current_temperature(client: &influxdb2::Client, bucket: &str, field: &str) -> Option<f64> {
         let flux = format!(
             r#"
                 from(bucket: "{bucket}")
                   |> range(start: -24h)
                   |> filter(fn: (r) => r._measurement == "voegeli")
-                  |> filter(fn: (r) => r._field == "inside_temperature")
+                  |> filter(fn: (r) => r._field == "{field}")
                   |> last()
                 "#,
             bucket = bucket
@@ -480,15 +495,25 @@ async fn main() {
         ConnectInfo(addr): ConnectInfo<SocketAddr>,
     ) -> impl IntoResponse {
         let role = params.get("role").cloned().unwrap_or("viewer".into());
+        let session_id = params
+            .get("session_id")
+            .cloned()
+            .unwrap_or_else(|| "missing".to_string());
         let ip = extract_real_ip(&headers).unwrap_or_else(|| addr.ip());
-        ws.on_upgrade(move |socket| handle_tcp_socket(socket, ip, role))
+        ws.on_upgrade(move |socket| handle_tcp_socket(socket, ip, role, session_id))
     }
 
-    async fn handle_tcp_socket(mut socket: WebSocket, ip: IpAddr, role: String) {
-        println!("New WS from IP: {}", ip);
+    async fn handle_tcp_socket(
+        mut socket: WebSocket,
+        ip: IpAddr,
+        role: String,
+        session_id: String,
+    ) {
+        println!("New WS from IP: {} (session_id={})", ip, session_id);
 
         let user_id = Uuid::new_v4();
         let mut this_user: Option<UserLocation> = None;
+        let mut counted_viewer = false;
 
         // Resolve geo + build current user entry
         if let Some(geo) = geo_lookup(&ip).await {
@@ -541,10 +566,25 @@ async fn main() {
         }
 
         if role == "viewer" {
-            ACTIVE_USERS.fetch_add(1, Ordering::SeqCst);
+            let now = chrono::Utc::now().timestamp();
+            let mut entry = ACTIVE_SESSIONS
+                .entry(session_id.clone())
+                .or_insert(SessionEntry {
+                    connections: 0,
+                    last_seen: now,
+                });
+            entry.connections += 1;
+            entry.last_seen = now;
+            if entry.connections == 1 {
+                ACTIVE_USERS.fetch_add(1, Ordering::SeqCst);
+            }
+            counted_viewer = true;
             println!(
-                "User connected, active users = {}",
+                "User connected, active users = {} (session_id={}, connections={})",
                 ACTIVE_USERS.load(Ordering::Relaxed)
+                ,
+                session_id,
+                entry.connections
             );
         }
 
@@ -610,6 +650,7 @@ async fn main() {
                         .await
                         .is_err()
                     {
+                        println!("WS ping failed (session_id={})", session_id);
                         break;
                     }
                 }
@@ -621,18 +662,79 @@ async fn main() {
                             .await
                             .is_err()
                         {
+                            println!("WS send failed (session_id={})", session_id);
                             break;
                         }
                     }
                 }
 
                 result = socket.recv() => {
-                    if result.is_none() {
-                        break;
+                    match result {
+                        None => {
+                            println!("WS recv None (session_id={})", session_id);
+                            break;
+                        }
+                        Some(Ok(axum::extract::ws::Message::Close(frame))) => {
+                            println!("WS recv Close {:?} (session_id={})", frame, session_id);
+                            break;
+                        }
+                        Some(Ok(axum::extract::ws::Message::Text(text))) => {
+                            if text == "hb" {
+                                println!("WS recv heartbeat (session_id={})", session_id);
+                            } else {
+                                println!(
+                                    "WS recv text len={} (session_id={})",
+                                    text.len(),
+                                    session_id
+                                );
+                            }
+                            if counted_viewer {
+                                if let Some(mut entry) = ACTIVE_SESSIONS.get_mut(&session_id) {
+                                    entry.last_seen = chrono::Utc::now().timestamp();
+                                }
+                            }
+                        }
+                        Some(Ok(axum::extract::ws::Message::Binary(data))) => {
+                            println!(
+                                "WS recv binary len={} (session_id={})",
+                                data.len(),
+                                session_id
+                            );
+                            if counted_viewer {
+                                if let Some(mut entry) = ACTIVE_SESSIONS.get_mut(&session_id) {
+                                    entry.last_seen = chrono::Utc::now().timestamp();
+                                }
+                            }
+                        }
+                        Some(Ok(axum::extract::ws::Message::Ping(_))) => {
+                            println!("WS recv Ping (session_id={})", session_id);
+                            if counted_viewer {
+                                if let Some(mut entry) = ACTIVE_SESSIONS.get_mut(&session_id) {
+                                    entry.last_seen = chrono::Utc::now().timestamp();
+                                }
+                            }
+                        }
+                        Some(Ok(axum::extract::ws::Message::Pong(_))) => {
+                            println!("WS recv Pong (session_id={})", session_id);
+                            if counted_viewer {
+                                if let Some(mut entry) = ACTIVE_SESSIONS.get_mut(&session_id) {
+                                    entry.last_seen = chrono::Utc::now().timestamp();
+                                }
+                            }
+                        }
+                        Some(Err(err)) => {
+                            println!("WS recv error {:?} (session_id={})", err, session_id);
+                            break;
+                        }
                     }
                 }
             }
         }
+
+        println!(
+            "WS loop exiting (session_id={}, counted_viewer={})",
+            session_id, counted_viewer
+        );
 
         // ---- Disconnect: remove from active map and notify everyone
         if let Some(u) = this_user {
@@ -645,11 +747,41 @@ async fn main() {
             let _ = TCP_BROADCAST.send(serde_json::to_string(&msg).unwrap());
         }
 
-        if role == "viewer" {
-            ACTIVE_USERS.fetch_sub(1, Ordering::SeqCst);
+        if role == "viewer" && counted_viewer {
+            if let Some(entry) = ACTIVE_SESSIONS.get(&session_id) {
+                println!(
+                    "Disconnect pre state (session_id={}, connections={}, last_seen={})",
+                    session_id, entry.connections, entry.last_seen
+                );
+            } else {
+                println!("Disconnect pre state missing (session_id={})", session_id);
+            }
+
+            let should_remove = if let Some(mut entry) = ACTIVE_SESSIONS.get_mut(&session_id) {
+                if entry.connections > 1 {
+                    entry.connections -= 1;
+                    println!(
+                        "Disconnect decremented (session_id={}, connections={})",
+                        session_id, entry.connections
+                    );
+                    false
+                } else {
+                    true
+                }
+            } else {
+                false
+            };
+
+            if should_remove {
+                ACTIVE_SESSIONS.remove(&session_id);
+                ACTIVE_USERS.fetch_sub(1, Ordering::SeqCst);
+                println!("Disconnect removed session (session_id={})", session_id);
+            }
             println!(
-                "User disconnected, active users = {}",
+                "User disconnected, active users = {} (session_id={})",
                 ACTIVE_USERS.load(Ordering::Relaxed)
+                ,
+                session_id
             );
         }
     }
@@ -671,9 +803,19 @@ async fn main() {
 
         tokio::spawn(async move {
             loop {
-                match fetch_current_temperature(&influx, &bucket).await {
+                match fetch_current_temperature(&influx, &bucket, "inside_temperature").await {
                     Some(temp) => {
-                        *CURRENT_TEMPERATURE.write().unwrap() = Some(temp);
+                        *CURRENT_INSIDE_TEMPERATURE.write().unwrap() = Some(temp);
+                        println!("Updated CURRENT_TEMPERATURE from Influx: {}", temp);
+                    }
+                    None => {
+                        eprintln!("Failed to read inside_temperature from Influx");
+                    }
+                }
+
+                match fetch_current_temperature(&influx, &bucket, "outside_temperature").await {
+                    Some(temp) => {
+                        *CURRENT_OUTSIDE_TEMPERATURE.write().unwrap() = Some(temp);
                         println!("Updated CURRENT_TEMPERATURE from Influx: {}", temp);
                     }
                     None => {
@@ -724,6 +866,40 @@ async fn main() {
                 if let Err(e) = influx.write(&bucket, stream::iter(vec![point])).await {
                     eprintln!("InfluxDB write failed: {}", e);
                 }
+            }
+        }
+    });
+
+    tokio::spawn(async {
+        const SESSION_TTL_SECS: i64 = 15;
+        let mut ticker = interval(Duration::from_secs(5));
+
+        loop {
+            ticker.tick().await;
+
+            let now = chrono::Utc::now().timestamp();
+            let mut removed = 0usize;
+            let mut stale_keys = Vec::new();
+
+            for entry in ACTIVE_SESSIONS.iter() {
+                if now - entry.value().last_seen > SESSION_TTL_SECS {
+                    stale_keys.push(entry.key().clone());
+                }
+            }
+
+            for key in stale_keys {
+                if ACTIVE_SESSIONS.remove(&key).is_some() {
+                    removed += 1;
+                }
+            }
+
+            if removed > 0 {
+                ACTIVE_USERS.fetch_sub(removed, Ordering::SeqCst);
+                println!(
+                    "Pruned {} stale sessions, active users = {}",
+                    removed,
+                    ACTIVE_USERS.load(Ordering::Relaxed)
+                );
             }
         }
     });
