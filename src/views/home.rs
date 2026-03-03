@@ -322,24 +322,99 @@ pub fn Home() -> Element {
         };
     };
 
-    let stream_url = cfg.stream_url.clone();
+    let hls_url = cfg.stream_url.clone();
+
     #[cfg(target_arch = "wasm32")]
     let ws_url = cfg.websocket_url.clone();
 
     #[cfg(target_arch = "wasm32")]
     {
+        // --- HLS init (safe: no unwrap panics) ---
+        let hls_url = hls_url.clone();
+
+        use_effect(move || {
+            use wasm_bindgen::JsCast;
+            use web_sys::{Document, HtmlVideoElement, Window};
+
+            let window: Window = web_sys::window().unwrap();
+            let document: Document = window.document().unwrap();
+
+            let Some(video_el) = document.get_element_by_id("hls-video") else {
+                web_sys::console::warn_1(&"hls-video not yet in DOM".into());
+                return;
+            };
+            let Ok(video) = video_el.dyn_into::<HtmlVideoElement>() else { return };
+
+            // Safari / iOS: native HLS
+            if video.can_play_type("application/vnd.apple.mpegurl") != "" {
+                video.set_src(&hls_url);
+                return;
+            }
+
+            // Load hls.js once
+            if document.get_element_by_id("hlsjs").is_none() {
+                let script = document.create_element("script").unwrap();
+                script.set_id("hlsjs");
+                script
+                    .set_attribute("src", "https://cdn.jsdelivr.net/npm/hls.js@latest")
+                    .unwrap();
+
+                document.body().unwrap().append_child(&script).unwrap();
+            }
+
+            // Try attach (will work once hls.js is loaded)
+            let hls = match js_sys::Reflect::get(&js_sys::global(), &"Hls".into()) {
+                Ok(v) => v,
+                Err(_) => return, // script not loaded yet
+            };
+
+            let is_supported = js_sys::Reflect::get(&hls, &"isSupported".into())
+                .ok()
+                .and_then(|f| f.dyn_into::<js_sys::Function>().ok())
+                .and_then(|f| f.call0(&hls).ok())
+                .and_then(|v| v.as_bool())
+                .unwrap_or(false);
+
+            if !is_supported {
+                return;
+            }
+
+            let hls_instance = js_sys::Reflect::construct(
+                &hls.dyn_into::<js_sys::Function>().unwrap(),
+                &js_sys::Array::new(),
+            )
+                .unwrap();
+
+            // Important: don't move `hls_url`
+            let url = hls_url.clone();
+
+            js_sys::Reflect::get(&hls_instance, &"loadSource".into())
+                .unwrap()
+                .dyn_into::<js_sys::Function>()
+                .unwrap()
+                .call1(&hls_instance, &url.into())
+                .unwrap();
+
+            js_sys::Reflect::get(&hls_instance, &"attachMedia".into())
+                .unwrap()
+                .dyn_into::<js_sys::Function>()
+                .unwrap()
+                .call1(&hls_instance, &video.into())
+                .unwrap();
+        });
+
+        // --- Spectrogram init (bring it back) ---
         let mut spec_initialized = use_signal(|| false);
         let ws_url_clone = ws_url.clone();
 
         use_effect(move || {
-            if !spec_initialized() {
-                if let Err(e) = init_webgl_spectrogram("spectrogram", &ws_url_clone) {
-                    web_sys::console::error_1(
-                        &format!("Failed to init spectrogram: {:?}", e).into(),
-                    );
-                }
-                spec_initialized.set(true);
+            if spec_initialized() {
+                return;
             }
+            if let Err(e) = init_webgl_spectrogram("spectrogram", &ws_url_clone) {
+                web_sys::console::error_1(&format!("Failed to init spectrogram: {:?}", e).into());
+            }
+            spec_initialized.set(true);
         });
     }
 
@@ -428,12 +503,14 @@ pub fn Home() -> Element {
             div {
                 class: "w-full flex flex-col items-center gap-6 px-4",
                 style: "--content-width: min(100%, 1280px); --stream-height: calc(var(--content-width) * 9 / 16); --spec-height: calc(var(--content-width) * 4 / 16);",
-                iframe {
-                    src: stream_url,
+                video {
+                    id: "hls-video",
+                    autoplay: true,
+                    muted: true,
+                    playsinline: true,
+                    controls: true,
                     style: "height: var(--stream-height); aspect-ratio: 16 / 9; width: var(--content-width);",
                     class: "rounded-lg bg-gray-800 shadow-lg",
-                    allow: "camera;autoplay;encrypted-media",
-                    allowfullscreen: true,
                 }
                 canvas {
                     id: "spectrogram",
