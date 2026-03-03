@@ -1,4 +1,6 @@
 use dioxus::prelude::*;
+#[cfg(target_arch = "wasm32")]
+use js_sys::eval;
 #[cfg(feature = "server")]
 use std::sync::Arc;
 #[cfg(feature = "server")]
@@ -100,8 +102,30 @@ async fn get_ir_state() -> Result<bool, ServerFnError> {
     let response = tcp_client::send_command("[CMD] GET IR STATE")
         .await
         .map_err(|e| ServerFnError::new(e))?;
-    let is_on = response.to_lowercase().contains("on") || response.contains("1");
-    Ok(is_on)
+
+    let payload = response.to_uppercase();
+    if payload.contains("IR LED STATE: ON")
+        || payload.contains("IR STATE IS ON")
+        || payload.contains("IR ON")
+    {
+        return Ok(true);
+    }
+
+    if payload.contains("IR LED STATE: OFF")
+        || payload.contains("IR STATE IS OFF")
+        || payload.contains("IR OFF")
+    {
+        return Ok(false);
+    }
+
+    match payload.trim() {
+        "1" => Ok(true),
+        "0" => Ok(false),
+        _ => Err(ServerFnError::new(format!(
+            "Unexpected IR state response from TCP: {}",
+            response
+        ))),
+    }
 }
 
 #[cfg(target_arch = "wasm32")]
@@ -304,6 +328,7 @@ pub fn Home() -> Element {
     let tcp_state = use_context::<tcp_state::TcpState>();
     let mut ir_enabled = tcp_state.ir_enabled;
     let mut saving = use_signal(|| false);
+    let mut ir_request_id = use_signal(|| 0u64);
 
     // Load initial states in background without blocking render
     use_resource(move || async move {
@@ -329,7 +354,9 @@ pub fn Home() -> Element {
     #[cfg(target_arch = "wasm32")]
     {
         let mut spec_initialized = use_signal(|| false);
+        let mut stream_initialized = use_signal(|| false);
         let ws_url_clone = ws_url.clone();
+        let stream_url_clone = stream_url.clone();
 
         use_effect(move || {
             if !spec_initialized() {
@@ -339,6 +366,47 @@ pub fn Home() -> Element {
                     );
                 }
                 spec_initialized.set(true);
+            }
+        });
+
+        use_effect(move || {
+            if !stream_initialized() {
+                let Ok(stream_url_js) = serde_json::to_string(&stream_url_clone) else {
+                    return;
+                };
+
+                let script = format!(
+                    r#"
+                    (() => {{
+                        const video = document.getElementById("birdcam-stream-video");
+                        if (!video) return;
+                        const streamUrl = {stream_url_js};
+                        if (video.src !== streamUrl) {{
+                            video.src = streamUrl;
+                            video.load();
+                        }}
+                        video.muted = true;
+                        video.defaultMuted = true;
+                        video.autoplay = true;
+                        video.playsInline = true;
+                        video.setAttribute("playsinline", "");
+                        video.setAttribute("webkit-playsinline", "");
+
+                        const tryPlay = () => {{
+                            const p = video.play();
+                            if (p && typeof p.catch === "function") {{
+                                p.catch(() => {{}});
+                            }}
+                        }};
+
+                        video.addEventListener("loadedmetadata", tryPlay, {{ once: true }});
+                        video.addEventListener("canplay", tryPlay, {{ once: true }});
+                        tryPlay();
+                    }})();
+                    "#
+                );
+                let _ = eval(&script);
+                stream_initialized.set(true);
             }
         });
     }
@@ -361,10 +429,46 @@ pub fn Home() -> Element {
                             if ir_enabled() { "bg-blue-500" } else { "bg-gray-600" }
                         ),
                         onclick: move |_| {
-                            let new_state = !ir_enabled();
+                            let previous_state = ir_enabled();
+                            let new_state = !previous_state;
+                            let request_id = ir_request_id() + 1;
+                            ir_request_id.set(request_id);
+                            ir_enabled.set(new_state);
+
+                            let mut ir_request_id_timeout = ir_request_id;
+                            let mut ir_enabled_timeout = ir_enabled;
                             spawn(async move {
-                                if let Ok(state) = toggle_ir_led(new_state).await {
-                                    ir_enabled.set(state);
+                                #[cfg(target_arch = "wasm32")]
+                                gloo_timers::future::sleep(std::time::Duration::from_secs(5)).await;
+                                #[cfg(not(target_arch = "wasm32"))]
+                                tokio::time::sleep(std::time::Duration::from_secs(5)).await;
+
+                                if ir_request_id_timeout() == request_id {
+                                    ir_enabled_timeout.set(previous_state);
+                                    ir_request_id_timeout.set(0);
+                                }
+                            });
+
+                            let mut ir_request_id_ack = ir_request_id;
+                            let mut ir_enabled_ack = ir_enabled;
+                            spawn(async move {
+                                if ir_request_id_ack() != request_id {
+                                    return;
+                                }
+
+                                match toggle_ir_led(new_state).await {
+                                    Ok(state) => {
+                                        if ir_request_id_ack() == request_id {
+                                            ir_enabled_ack.set(state);
+                                            ir_request_id_ack.set(0);
+                                        }
+                                    }
+                                    Err(_) => {
+                                        if ir_request_id_ack() == request_id {
+                                            ir_enabled_ack.set(previous_state);
+                                            ir_request_id_ack.set(0);
+                                        }
+                                    }
                                 }
                             });
                         },
@@ -428,12 +532,20 @@ pub fn Home() -> Element {
             div {
                 class: "w-full flex flex-col items-center gap-6 px-4",
                 style: "--content-width: min(100%, 1280px); --stream-height: calc(var(--content-width) * 9 / 16); --spec-height: calc(var(--content-width) * 4 / 16);",
-                iframe {
-                    src: stream_url,
+                div {
+                    class: "rounded-lg bg-gray-800 shadow-lg overflow-hidden",
                     style: "height: var(--stream-height); aspect-ratio: 16 / 9; width: var(--content-width);",
-                    class: "rounded-lg bg-gray-800 shadow-lg",
-                    allow: "camera;autoplay;encrypted-media",
-                    allowfullscreen: true,
+                    video {
+                        id: "birdcam-stream-video",
+                        src: stream_url,
+                        autoplay: true,
+                        muted: true,
+                        playsinline: true,
+                        controls: true,
+                        preload: "auto",
+                        class: "h-full w-full object-cover",
+                        "Your browser does not support HLS playback."
+                    }
                 }
                 canvas {
                     id: "spectrogram",

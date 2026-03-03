@@ -15,7 +15,10 @@ pub fn Navbar() -> Element {
         Route::Home {} => "home",
         Route::Gallery {} => "gallery",
         Route::MakingOf {} => "making",
+        Route::HowItWorks {} => "how",
         Route::VoguGuru {} => "vogu",
+        Route::Newsletter {} => "newsletter",
+        Route::Unsubscribe { .. } => "newsletter",
         Route::ForNerds {} => "nerds",
     };
 
@@ -32,6 +35,8 @@ pub fn Navbar() -> Element {
                 Link { to: Route::Home {}, "Home" }
                 Link { to: Route::Gallery {}, "Gallery" }
                 Link { to: Route::MakingOf {}, "Making of" }
+                Link { to: Route::HowItWorks {}, "How It Works" }
+                Link { to: Route::Newsletter {}, "Newsletter" }
                 Link { to: Route::VoguGuru {}, "vogu.guru" }
 
                 if show_nerds {
@@ -51,6 +56,8 @@ pub fn Navbar() -> Element {
                             "home" => Some(Route::Home {}),
                             "gallery" => Some(Route::Gallery {}),
                             "making" => Some(Route::MakingOf {}),
+                            "how" => Some(Route::HowItWorks {}),
+                            "newsletter" => Some(Route::Newsletter {}),
                             "vogu" => Some(Route::VoguGuru {}),
                             "nerds" => Some(Route::ForNerds {}),
                             _ => None,
@@ -64,6 +71,8 @@ pub fn Navbar() -> Element {
                     option { value: "home", "Home" }
                     option { value: "gallery", "Gallery" }
                     option { value: "making", "Making of" }
+                    option { value: "how", "How It Works" }
+                    option { value: "newsletter", "Newsletter" }
                     option { value: "vogu", "vogu.guru" }
 
                     if show_nerds {

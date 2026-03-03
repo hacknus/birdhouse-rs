@@ -15,10 +15,13 @@ use serde::{Deserialize, Serialize};
 use std::net::IpAddr;
 #[cfg(feature = "server")]
 use uuid::Uuid;
-use views::{ForNerds, Gallery, Home, MakingOf, Navbar, VoguGuru};
+use views::{
+    ForNerds, Gallery, Home, HowItWorks, MakingOf, Navbar, Newsletter, Unsubscribe, VoguGuru,
+};
 
 mod api;
 mod components;
+mod newsletter;
 mod views;
 
 #[cfg(feature = "server")]
@@ -131,8 +134,17 @@ enum Route {
         #[route("/making-of")]
         MakingOf {},
 
+        #[route("/how-it-works")]
+        HowItWorks {},
+
         #[route("/vogu.guru")]
         VoguGuru {},
+
+        #[route("/newsletter")]
+        Newsletter {},
+
+        #[route("/unsubscribe/:encoded_email")]
+        Unsubscribe { encoded_email: String },
 
         #[route("/for_nerds")]
         ForNerds {},
@@ -247,7 +259,12 @@ async fn main() {
     use axum::routing::post;
     use axum::Router;
     use axum::{
+        body::Body,
         extract::ws::{WebSocket, WebSocketUpgrade},
+        extract::OriginalUri,
+        extract::Path,
+        http::Response,
+        http::StatusCode,
         response::IntoResponse,
         response::Redirect,
         routing::get,
@@ -262,6 +279,117 @@ async fn main() {
     use tower_http::services::ServeDir;
 
     dotenv::dotenv().ok();
+
+    async fn redirect_unsubscribe(Path(encoded_email): Path<String>) -> Redirect {
+        Redirect::temporary(&format!("/unsubscribe/{}", encoded_email))
+    }
+
+    async fn stream_proxy(
+        Path(path): Path<String>,
+        OriginalUri(uri): OriginalUri,
+        headers: HeaderMap,
+    ) -> impl IntoResponse {
+        let upstream_base = std::env::var("STREAM_PROXY_BASE").ok().or_else(|| {
+            std::env::var("STREAM_MEDIA_URL")
+                .ok()
+                .or_else(|| std::env::var("STREAM_URL").ok())
+                .and_then(|raw| {
+                    reqwest::Url::parse(&raw).ok().and_then(|u| {
+                        let host = u.host_str()?;
+                        let base = if let Some(port) = u.port() {
+                            format!("{}://{}:{}", u.scheme(), host, port)
+                        } else {
+                            format!("{}://{}", u.scheme(), host)
+                        };
+                        Some(base)
+                    })
+                })
+        });
+
+        let Some(upstream_base) = upstream_base else {
+            return (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                "STREAM_PROXY_BASE or STREAM_MEDIA_URL must be configured",
+            )
+                .into_response();
+        };
+
+        let mut target = format!("{}/{}", upstream_base.trim_end_matches('/'), path);
+        if let Some(q) = uri.query() {
+            if !q.is_empty() {
+                target.push('?');
+                target.push_str(q);
+            }
+        }
+
+        let client = reqwest::Client::new();
+        let mut req = client.get(&target);
+        if let Some(range) = headers.get("range") {
+            req = req.header("range", range);
+        }
+
+        let Ok(upstream) = req.send().await else {
+            return (
+                StatusCode::BAD_GATEWAY,
+                "Failed to fetch upstream stream resource",
+            )
+                .into_response();
+        };
+
+        let status =
+            StatusCode::from_u16(upstream.status().as_u16()).unwrap_or(StatusCode::BAD_GATEWAY);
+        let content_type = upstream
+            .headers()
+            .get("content-type")
+            .and_then(|v| v.to_str().ok())
+            .unwrap_or("application/octet-stream")
+            .to_string();
+        let accept_ranges = upstream
+            .headers()
+            .get("accept-ranges")
+            .and_then(|v| v.to_str().ok())
+            .unwrap_or("bytes")
+            .to_string();
+        let cache_control = upstream
+            .headers()
+            .get("cache-control")
+            .and_then(|v| v.to_str().ok())
+            .unwrap_or("no-cache")
+            .to_string();
+        let content_length = upstream
+            .headers()
+            .get("content-length")
+            .and_then(|v| v.to_str().ok())
+            .map(|v| v.to_string());
+
+        let Ok(bytes) = upstream.bytes().await else {
+            return (
+                StatusCode::BAD_GATEWAY,
+                "Failed to read upstream stream resource",
+            )
+                .into_response();
+        };
+
+        let mut builder = Response::builder()
+            .status(status)
+            .header("content-type", content_type)
+            .header("accept-ranges", accept_ranges)
+            .header("cache-control", cache_control);
+
+        if let Some(v) = content_length {
+            builder = builder.header("content-length", v);
+        }
+
+        builder
+            .body(Body::from(bytes))
+            .unwrap_or_else(|_| {
+                Response::builder()
+                    .status(StatusCode::BAD_GATEWAY)
+                    .body(Body::from("Failed to build proxy response"))
+                    .unwrap()
+            })
+            .into_response()
+    }
 
     static ACTIVE_USERS: Lazy<AtomicUsize> = Lazy::new(|| AtomicUsize::new(0));
 
@@ -659,6 +787,12 @@ async fn main() {
                         println!("WS ping failed (session_id={})", session_id);
                         break;
                     }
+
+                    if counted_viewer {
+                        if let Some(mut entry) = ACTIVE_SESSIONS.get_mut(&session_id) {
+                            entry.last_seen = chrono::Utc::now().timestamp();
+                        }
+                    }
                 }
 
                 msg = rx.recv() => {
@@ -876,7 +1010,7 @@ async fn main() {
     });
 
     tokio::spawn(async {
-        const SESSION_TTL_SECS: i64 = 15;
+        const SESSION_TTL_SECS: i64 = 90;
         let mut ticker = interval(Duration::from_secs(5));
 
         loop {
@@ -899,7 +1033,9 @@ async fn main() {
             }
 
             if removed > 0 {
-                ACTIVE_USERS.fetch_sub(removed, Ordering::SeqCst);
+                let current = ACTIVE_USERS.load(Ordering::SeqCst);
+                let to_sub = removed.min(current);
+                ACTIVE_USERS.fetch_sub(to_sub, Ordering::SeqCst);
                 println!(
                     "Pruned {} stale sessions, active users = {}",
                     removed,
@@ -919,7 +1055,17 @@ async fn main() {
 
     let router = Router::new()
         .route("/api/upload_image", post(upload_image_multipart))
+        .route("/api/stream-proxy/{*path}", get(stream_proxy))
         .route("/voegeli", get(|| async { Redirect::temporary("/") }))
+        .route("/unsubscribe/{encoded_email}/", get(redirect_unsubscribe))
+        .route(
+            "/voegeli/unsubscribe/{encoded_email}",
+            get(redirect_unsubscribe),
+        )
+        .route(
+            "/voegeli/unsubscribe/{encoded_email}/",
+            get(redirect_unsubscribe),
+        )
         .route("/ws/tcp", get(tcp_websocket_handler))
         //.nest_service("/assets", ServeDir::new("public/assets"))
         .nest_service("/gallery-assets", ServeDir::new("gallery"))

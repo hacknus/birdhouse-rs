@@ -28,7 +28,9 @@ fn format_display(filename: &str) -> String {
     }
 
     // normalize `YYYYMMDD_HHMMSS` or `YYYYMMDD-HHMMSS` -> `YYYYMMDDHHMMSS`
-    let normalized = if stem.len() == 15 && (stem.chars().nth(8) == Some('_') || stem.chars().nth(8) == Some('-')) {
+    let normalized = if stem.len() == 15
+        && (stem.chars().nth(8) == Some('_') || stem.chars().nth(8) == Some('-'))
+    {
         let mut t = stem.clone();
         t.remove(8);
         t
@@ -58,9 +60,9 @@ fn ImageViewer(
     on_next: EventHandler<()>,
     on_prev: EventHandler<()>,
 ) -> Element {
+    use dioxus::prelude::spawn;
     #[cfg(target_arch = "wasm32")]
     use std::time::Duration;
-    use dioxus::prelude::spawn;
 
     let Some(idx) = current_index else {
         return rsx! { div {} };
@@ -102,7 +104,7 @@ fn ImageViewer(
             let x = touch.page_coordinates().x as f64;
             touch_start_x.set(x);
             touch_current_x.set(x); // Initialize "current" to start
-            // while dragging, disable CSS transition so strip follows finger
+                                    // while dragging, disable CSS transition so strip follows finger
             is_animating.set(false);
             swipe_offset.set(0.0);
         }
@@ -160,7 +162,11 @@ fn ImageViewer(
                     .unwrap_or(0.0);
 
                 // target offset: +/- viewport width so transform goes to 0vw (prev) or -200vw (next)
-                let end_px = if diff_x > 0.0 { viewport_px } else { -viewport_px };
+                let end_px = if diff_x > 0.0 {
+                    viewport_px
+                } else {
+                    -viewport_px
+                };
                 swipe_offset.set(end_px);
 
                 let on_next = on_next.clone();
@@ -209,7 +215,11 @@ fn ImageViewer(
     // Build transform using *vw* units derived from the current px offset so px/vw mixing can't desync directions.
     let style_string = {
         let offset_px = swipe_offset();
-        let transition = if is_animating() { "transform 300ms ease" } else { "none" };
+        let transition = if is_animating() {
+            "transform 300ms ease"
+        } else {
+            "none"
+        };
 
         // viewport width in pixels (wasm only). Non-wasm fallback to 1.0 to avoid divide-by-zero.
         #[cfg(target_arch = "wasm32")]
@@ -241,7 +251,8 @@ fn ImageViewer(
     };
 
     // each slide equals viewport width so adjacent slides sit exactly next to the current
-    let slide_style = "flex: 0 0 100vw; display: flex; align-items: center; justify-content: center;";
+    let slide_style =
+        "flex: 0 0 100vw; display: flex; align-items: center; justify-content: center;";
 
     // inner slide wrapper pads left/right so images don't touch edges and create a small gap between slides
     let inner_slide_style = format!("width: 100%; padding: 0 {}px; display: flex; align-items: center; justify-content: center;", half_gap);

@@ -25,5 +25,13 @@ pub use gallery::Gallery;
 
 pub mod gallery_client;
 mod makingof;
-
 pub use makingof::MakingOf;
+
+mod how_it_works;
+pub use how_it_works::HowItWorks;
+
+mod newsletter;
+pub use newsletter::Newsletter;
+
+mod unsubscribe;
+pub use unsubscribe::Unsubscribe;

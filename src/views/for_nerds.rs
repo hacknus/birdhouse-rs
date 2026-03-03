@@ -23,6 +23,10 @@ pub fn ForNerds() -> Element {
         cfg.grafana_base_url.trim_end_matches('/'),
         cfg.grafana_dashboard_nerds
     );
+    let dashboard_height = std::env::var("GRAFANA_NERDS_HEIGHT")
+        .ok()
+        .and_then(|v| v.parse::<u32>().ok())
+        .unwrap_or(2200);
 
     use_effect(|| {
         #[cfg(target_arch = "wasm32")]
@@ -66,14 +70,12 @@ pub fn ForNerds() -> Element {
             }
 
             // DASHBOARD
-            div {
-                style: "width: var(--content-width);",
-                class: "rounded-lg shadow-lg overflow-hidden bg-white aspect-video md:aspect-video h-[80vh] md:h-auto",
-                iframe {
-                    src: grafana_url,
-                    style: "width: 100%; height: 100%; border: none;",
-                    referrerpolicy: "no-referrer",
-                }
+            iframe {
+                src: grafana_url,
+                style: format!("width: var(--content-width); height: {}px; border: none;", dashboard_height),
+                class: "rounded-lg shadow-lg bg-white",
+                referrerpolicy: "no-referrer",
+                scrolling: "no",
             }
         }
     }

@@ -1,12 +1,8 @@
-use axum::{
-    extract::Multipart,
-    http::StatusCode,
-    response::IntoResponse,
-};
-use std::path::Path;
-use tokio::fs;
+use axum::{extract::Multipart, http::StatusCode, response::IntoResponse};
 use base64::engine::general_purpose;
 use base64::Engine;
+use std::path::Path;
+use tokio::fs;
 
 pub async fn upload_image_multipart(mut multipart: Multipart) -> impl IntoResponse {
     let mut file_bytes: Option<bytes::Bytes> = None;
@@ -77,12 +73,20 @@ pub async fn upload_image_multipart(mut multipart: Multipart) -> impl IntoRespon
 
     let upload_dir = "./gallery";
     if let Err(e) = fs::create_dir_all(upload_dir).await {
-        return (StatusCode::INTERNAL_SERVER_ERROR, format!("mkdir failed: {}", e)).into_response();
+        return (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            format!("mkdir failed: {}", e),
+        )
+            .into_response();
     }
 
     let path = format!("{}/{}", upload_dir, safe_filename);
     if let Err(e) = fs::write(&path, &bytes).await {
-        return (StatusCode::INTERNAL_SERVER_ERROR, format!("write failed: {}", e)).into_response();
+        return (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            format!("write failed: {}", e),
+        )
+            .into_response();
     }
 
     (StatusCode::OK, format!("uploaded {}", path)).into_response()

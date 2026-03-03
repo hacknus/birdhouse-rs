@@ -146,9 +146,9 @@ pub async fn send_command(cmd: &str) -> Result<String, String> {
         Duration::from_secs(3),
         connection.stream.write_all(encrypted.as_bytes()),
     )
-        .await
-        .map_err(|_| "Write timeout".to_string())?
-        .map_err(|e| format!("Write failed: {}", e))?;
+    .await
+    .map_err(|_| "Write timeout".to_string())?
+    .map_err(|e| format!("Write failed: {}", e))?;
 
     let mut buffer = vec![0u8; 256];
     match timeout(Duration::from_secs(3), connection.stream.read(&mut buffer)).await {
