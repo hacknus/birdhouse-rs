@@ -2,6 +2,10 @@ use dioxus::prelude::*;
 #[cfg(target_arch = "wasm32")]
 use js_sys::eval;
 #[cfg(feature = "server")]
+use std::collections::HashMap;
+#[cfg(feature = "server")]
+use std::net::{IpAddr, SocketAddr};
+#[cfg(feature = "server")]
 use std::sync::Arc;
 #[cfg(feature = "server")]
 use std::time::{SystemTime, UNIX_EPOCH};
@@ -13,46 +17,136 @@ use wasm_bindgen::{closure::Closure, JsCast};
 use web_sys::{MessageEvent, WebSocket};
 
 const CAMERA_SVG: Asset = asset!("/assets/svg/camera.svg");
+#[cfg(feature = "server")]
+const IMAGE_SAVE_LIMIT_PER_HOUR: usize = 5;
 
 #[cfg(feature = "server")]
-static IMAGE_SAVE_TRACKER: once_cell::sync::Lazy<Arc<Mutex<Vec<u64>>>> =
-    once_cell::sync::Lazy::new(|| Arc::new(Mutex::new(Vec::new())));
-#[server]
-async fn save_image_to_gallery() -> Result<String, ServerFnError> {
+static IMAGE_SAVE_TRACKER: once_cell::sync::Lazy<Arc<Mutex<HashMap<String, Vec<u64>>>>> =
+    once_cell::sync::Lazy::new(|| Arc::new(Mutex::new(HashMap::new())));
+
+#[derive(Clone, serde::Serialize, serde::Deserialize)]
+struct ImageSaveStatus {
+    count_last_hour: usize,
+    limit_per_hour: usize,
+    is_limited: bool,
+}
+
+#[cfg(feature = "server")]
+fn extract_real_ip(headers: &dioxus_fullstack::http::HeaderMap) -> Option<IpAddr> {
+    for header_name in [
+        "cf-connecting-ip",
+        "x-real-ip",
+        "x-forwarded-for",
+        "forwarded",
+    ] {
+        if let Some(value) = headers.get(header_name).and_then(|v| v.to_str().ok()) {
+            if header_name == "x-forwarded-for" {
+                let first = value.split(',').next()?.trim();
+                if let Ok(ip) = first.parse::<IpAddr>() {
+                    return Some(ip);
+                }
+            } else if let Ok(ip) = value.trim().parse::<IpAddr>() {
+                return Some(ip);
+            }
+        }
+    }
+    None
+}
+
+#[cfg(feature = "server")]
+async fn client_ip_key() -> String {
+    if let Ok(headers) =
+        dioxus_fullstack::FullstackContext::extract::<dioxus_fullstack::http::HeaderMap, _>().await
+    {
+        if let Some(ip) = extract_real_ip(&headers) {
+            return ip.to_string();
+        }
+    }
+
+    if let Ok(connect_info) = dioxus_fullstack::FullstackContext::extract::<
+        dioxus_fullstack::axum::extract::ConnectInfo<SocketAddr>,
+        _,
+    >()
+    .await
+    {
+        return connect_info.0.ip().to_string();
+    }
+
+    "unknown".to_string()
+}
+
+#[cfg(feature = "server")]
+async fn image_save_status_for_ip(ip_key: &str) -> ImageSaveStatus {
     let now = SystemTime::now()
         .duration_since(UNIX_EPOCH)
-        .unwrap()
+        .unwrap_or_default()
         .as_secs();
     let one_hour_ago = now.saturating_sub(3600);
 
     let mut tracker = IMAGE_SAVE_TRACKER.lock().await;
+    let entries = tracker.entry(ip_key.to_string()).or_default();
+    entries.retain(|&ts| ts > one_hour_ago);
+    let count_last_hour = entries.len();
 
-    // Remove timestamps older than 1 hour
-    tracker.retain(|&ts| ts > one_hour_ago);
+    ImageSaveStatus {
+        count_last_hour,
+        limit_per_hour: IMAGE_SAVE_LIMIT_PER_HOUR,
+        is_limited: count_last_hour >= IMAGE_SAVE_LIMIT_PER_HOUR,
+    }
+}
 
-    // TODO solve this properly
-    // if tracker.len() >= 10 {
-    //     return Err(ServerFnError::new(
-    //         "Rate limit exceeded. Maximum 10 images per hour.",
-    //     ));
-    // }
+#[server]
+async fn get_image_save_status() -> Result<ImageSaveStatus, ServerFnError> {
+    #[cfg(feature = "server")]
+    {
+        let ip_key = client_ip_key().await;
+        return Ok(image_save_status_for_ip(&ip_key).await);
+    }
 
-    // Add current timestamp
-    tracker.push(now);
+    #[cfg(not(feature = "server"))]
+    {
+        Err(ServerFnError::new("Not running on server"))
+    }
+}
 
-    // Get the count before dropping the guard
-    let count = tracker.len();
-    drop(tracker);
+#[server]
+async fn save_image_to_gallery() -> Result<String, ServerFnError> {
+    #[cfg(feature = "server")]
+    {
+        let ip_key = client_ip_key().await;
+        let now = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .unwrap_or_default()
+            .as_secs();
 
-    // Send TCP command
-    tcp_client::send_command("[CMD] save image")
-        .await
-        .map_err(|e| ServerFnError::new(format!("Failed to save image: {}", e)))?;
+        let mut tracker = IMAGE_SAVE_TRACKER.lock().await;
+        let one_hour_ago = now.saturating_sub(3600);
+        let entries = tracker.entry(ip_key).or_default();
+        entries.retain(|&ts| ts > one_hour_ago);
 
-    Ok(format!(
-        "Image saved successfully. {} images saved in the last hour.",
-        count
-    ))
+        if entries.len() >= IMAGE_SAVE_LIMIT_PER_HOUR {
+            return Err(ServerFnError::new(format!(
+                "Too many pictures taken in the last hour (limit: {}).",
+                IMAGE_SAVE_LIMIT_PER_HOUR
+            )));
+        }
+
+        tcp_client::send_command("[CMD] save image")
+            .await
+            .map_err(|e| ServerFnError::new(format!("Failed to save image: {}", e)))?;
+
+        entries.push(now);
+        let count = entries.len();
+        return Ok(format!(
+            "Image saved successfully. {} images saved in the last hour.",
+            count
+        ));
+    }
+
+    #[cfg(not(feature = "server"))]
+    {
+        Err(ServerFnError::new("Not running on server"))
+    }
 }
 #[server]
 pub async fn get_stream_config() -> Result<StreamConfig, ServerFnError> {
@@ -325,6 +419,11 @@ fn init_webgl_spectrogram(canvas_id: &str, ws_url: &str) -> Result<(), wasm_bind
 
 pub fn Home() -> Element {
     let config = use_resource(|| async move { get_stream_config().await.ok() });
+    let mut save_status_refresh = use_signal(|| 0u64);
+    let save_status = use_resource(move || {
+        let _ = save_status_refresh();
+        async move { get_image_save_status().await.ok() }
+    });
     let tcp_state = use_context::<tcp_state::TcpState>();
     let mut ir_enabled = tcp_state.ir_enabled;
     let mut saving = use_signal(|| false);
@@ -345,6 +444,21 @@ pub fn Home() -> Element {
                 "Loading..."
             }
         };
+    };
+    let save_status_value = save_status.read();
+    let save_status_current = save_status_value.as_ref().and_then(|s| s.as_ref().cloned());
+    let is_save_limited = save_status_current
+        .as_ref()
+        .map(|s| s.is_limited)
+        .unwrap_or(false);
+    let save_count_text = save_status_current
+        .as_ref()
+        .map(|s| format!("{}/{} last hour", s.count_last_hour, s.limit_per_hour))
+        .unwrap_or_else(|| "-/- last hour".to_string());
+    let save_tooltip = if is_save_limited {
+        "too many pictures taken in the last hour"
+    } else {
+        "save image"
     };
 
     let stream_url = cfg.stream_url.clone();
@@ -486,18 +600,26 @@ pub fn Home() -> Element {
                         class: "text-white font-small whitespace-nowrap",
                         "Save Image"
                     }
+                    // p {
+                    //     class: "text-xs text-slate-300 whitespace-nowrap",
+                    //     "{save_count_text}"
+                    // }
 
                    button {
                         class: format!(
                             "px-4 py-0.5 rounded-lg transition-colors {}",
-                            if saving() {
+                            if is_save_limited {
+                                "bg-gray-500 text-gray-300 cursor-not-allowed"
+                            } else if saving() {
                                 "bg-blue-500 hover:bg-blue-600 active:bg-blue-700"
                             } else {
                                 "bg-white hover:bg-gray-200"
                             }
                         ),
+                        disabled: saving() || is_save_limited,
+                        title: save_tooltip,
                         onclick: move |_| {
-                            if saving() {
+                            if saving() || is_save_limited {
                                 return;
                             }
 
@@ -517,6 +639,7 @@ pub fn Home() -> Element {
 
                                 // Return to white
                                 saving.set(false);
+                                save_status_refresh += 1;
                             });
                         },
 

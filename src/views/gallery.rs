@@ -7,6 +7,7 @@ use std::path::Path;
 
 const ARROW_LEFT: Asset = asset!("/assets/svg/arrow-left-svgrepo-com.svg");
 const ARROW_RIGHT: Asset = asset!("/assets/svg/arrow-right-svgrepo-com.svg");
+const DOWNLOAD_SVG: Asset = asset!("/assets/svg/download.svg");
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 struct ImageInfo {
@@ -302,6 +303,20 @@ fn ImageViewer(
                     on_close.call(());
                 },
                 "✕"
+            }
+
+            a {
+                class: "absolute left-4 text-white hover:text-blue-200 transition-colors z-60 bg-black bg-opacity-30 rounded-lg p-2",
+                style: "top: 68px;",
+                href: current_image.url.clone(),
+                download: current_image.filename.clone(),
+                onclick: move |evt| evt.stop_propagation(),
+                title: "Download image",
+                img {
+                    src: DOWNLOAD_SVG,
+                    class: "w-6 h-6 invert",
+                    alt: "Download"
+                }
             }
 
             button {
