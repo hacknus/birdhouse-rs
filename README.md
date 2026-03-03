@@ -31,8 +31,9 @@ To test it in development mode:
 dx serve
 ```
 
-To build the docker containers, first set up grafna, mediamtx and coturn docker containers and then
+To build the docker containers, first set up grafana, mediamtx and coturn docker containers and then
 ```
 docker compose up -d --build
 ```
+in this root directory.
 

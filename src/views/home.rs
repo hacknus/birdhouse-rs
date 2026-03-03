@@ -1,6 +1,4 @@
 use dioxus::prelude::*;
-#[cfg(target_arch = "wasm32")]
-use js_sys::eval;
 #[cfg(feature = "server")]
 use std::collections::HashMap;
 #[cfg(feature = "server")]
@@ -468,9 +466,7 @@ pub fn Home() -> Element {
     #[cfg(target_arch = "wasm32")]
     {
         let mut spec_initialized = use_signal(|| false);
-        let mut stream_initialized = use_signal(|| false);
         let ws_url_clone = ws_url.clone();
-        let stream_url_clone = stream_url.clone();
 
         use_effect(move || {
             if !spec_initialized() {
@@ -480,47 +476,6 @@ pub fn Home() -> Element {
                     );
                 }
                 spec_initialized.set(true);
-            }
-        });
-
-        use_effect(move || {
-            if !stream_initialized() {
-                let Ok(stream_url_js) = serde_json::to_string(&stream_url_clone) else {
-                    return;
-                };
-
-                let script = format!(
-                    r#"
-                    (() => {{
-                        const video = document.getElementById("birdcam-stream-video");
-                        if (!video) return;
-                        const streamUrl = {stream_url_js};
-                        if (video.src !== streamUrl) {{
-                            video.src = streamUrl;
-                            video.load();
-                        }}
-                        video.muted = true;
-                        video.defaultMuted = true;
-                        video.autoplay = true;
-                        video.playsInline = true;
-                        video.setAttribute("playsinline", "");
-                        video.setAttribute("webkit-playsinline", "");
-
-                        const tryPlay = () => {{
-                            const p = video.play();
-                            if (p && typeof p.catch === "function") {{
-                                p.catch(() => {{}});
-                            }}
-                        }};
-
-                        video.addEventListener("loadedmetadata", tryPlay, {{ once: true }});
-                        video.addEventListener("canplay", tryPlay, {{ once: true }});
-                        tryPlay();
-                    }})();
-                    "#
-                );
-                let _ = eval(&script);
-                stream_initialized.set(true);
             }
         });
     }
@@ -655,20 +610,12 @@ pub fn Home() -> Element {
             div {
                 class: "w-full flex flex-col items-center gap-6 px-4",
                 style: "--content-width: min(100%, 1280px); --stream-height: calc(var(--content-width) * 9 / 16); --spec-height: calc(var(--content-width) * 4 / 16);",
-                div {
-                    class: "rounded-lg bg-gray-800 shadow-lg overflow-hidden",
+                iframe {
+                    src: stream_url,
                     style: "height: var(--stream-height); aspect-ratio: 16 / 9; width: var(--content-width);",
-                    video {
-                        id: "birdcam-stream-video",
-                        src: stream_url,
-                        autoplay: true,
-                        muted: true,
-                        playsinline: true,
-                        controls: true,
-                        preload: "auto",
-                        class: "h-full w-full object-cover",
-                        "Your browser does not support HLS playback."
-                    }
+                    class: "rounded-lg bg-gray-800 shadow-lg",
+                    allow: "camera;autoplay;encrypted-media",
+                    allowfullscreen: true,
                 }
                 canvas {
                     id: "spectrogram",
