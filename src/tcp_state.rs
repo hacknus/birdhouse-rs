@@ -8,6 +8,32 @@ use wasm_bindgen::{closure::Closure, JsCast};
 #[cfg(target_arch = "wasm32")]
 use web_sys::{MessageEvent, WebSocket};
 
+#[cfg(target_arch = "wasm32")]
+fn parse_bool_from_state_payload(
+    payload: &str,
+    on_contains: &[&str],
+    off_contains: &[&str],
+    on_exact: &[&str],
+    off_exact: &[&str],
+) -> Option<bool> {
+    for raw_line in payload.lines() {
+        let line = raw_line.trim();
+        if line.is_empty() {
+            continue;
+        }
+
+        if on_exact.contains(&line) || on_contains.iter().any(|p| line.contains(p)) {
+            return Some(true);
+        }
+
+        if off_exact.contains(&line) || off_contains.iter().any(|p| line.contains(p)) {
+            return Some(false);
+        }
+    }
+
+    None
+}
+
 #[derive(Clone)]
 pub struct TcpState {
     pub ir_enabled: Signal<bool>,
@@ -115,32 +141,24 @@ fn open_viewer_websocket(
     let on_message = Closure::wrap(Box::new(move |event: MessageEvent| {
         if let Some(text) = event.data().as_string() {
             let payload = text.to_uppercase();
-            match () {
-                _ if payload.contains("IR LED STATE: ON")
-                    || payload.contains("IR STATE IS ON")
-                    || payload.contains("IR ON") =>
-                {
-                    ir_enabled.set(true);
-                }
-                _ if payload.contains("IR LED STATE: OFF")
-                    || payload.contains("IR STATE IS OFF")
-                    || payload.contains("IR OFF") =>
-                {
-                    ir_enabled.set(false);
-                }
-                _ if payload.contains("IR FILTER STATE: ON")
-                    || payload.contains("IR FILTER STATE IS ON")
-                    || payload.contains("IR FILTER ON") =>
-                {
-                    ir_filter.set(true);
-                }
-                _ if payload.contains("IR FILTER STATE: OFF")
-                    || payload.contains("IR FILTER STATE IS OFF")
-                    || payload.contains("IR FILTER OFF") =>
-                {
-                    ir_filter.set(false);
-                }
-                _ => {}
+            if let Some(state) = parse_bool_from_state_payload(
+                &payload,
+                &["IR LED STATE: ON", "IR STATE IS ON"],
+                &["IR LED STATE: OFF", "IR STATE IS OFF"],
+                &["IR ON", "1"],
+                &["IR OFF", "0"],
+            ) {
+                ir_enabled.set(state);
+            }
+
+            if let Some(state) = parse_bool_from_state_payload(
+                &payload,
+                &["IR FILTER STATE: ON", "IR FILTER STATE IS ON"],
+                &["IR FILTER STATE: OFF", "IR FILTER STATE IS OFF"],
+                &["IR FILTER ON"],
+                &["IR FILTER OFF"],
+            ) {
+                ir_filter.set(state);
             }
         }
     }) as Box<dyn FnMut(_)>);

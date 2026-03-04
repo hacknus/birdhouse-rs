@@ -195,29 +195,30 @@ async fn get_ir_state() -> Result<bool, ServerFnError> {
         .await
         .map_err(|e| ServerFnError::new(e))?;
 
+    println!("Received IR state response from TCP: '{:?}'", response);
+
     let payload = response.to_uppercase();
-    if payload.contains("IR LED STATE: ON")
-        || payload.contains("IR STATE IS ON")
-        || payload.contains("IR ON")
-    {
-        return Ok(true);
+    for raw_line in payload.lines() {
+        let line = raw_line.trim();
+        if line.is_empty() {
+            continue;
+        }
+
+        println!("Checking line for IR state: '{:?}'", line);
+
+        if line.contains("IR STATE IS ON") {
+            return Ok(true);
+        }
+
+        if line.contains("IR STATE IS OFF") {
+            return Ok(false);
+        }
     }
 
-    if payload.contains("IR LED STATE: OFF")
-        || payload.contains("IR STATE IS OFF")
-        || payload.contains("IR OFF")
-    {
-        return Ok(false);
-    }
-
-    match payload.trim() {
-        "1" => Ok(true),
-        "0" => Ok(false),
-        _ => Err(ServerFnError::new(format!(
-            "Unexpected IR state response from TCP: {}",
-            response
-        ))),
-    }
+    Err(ServerFnError::new(format!(
+        "Unexpected IR state response from TCP: {}",
+        response
+    )))
 }
 
 #[cfg(target_arch = "wasm32")]

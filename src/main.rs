@@ -452,7 +452,7 @@ async fn main() {
         client: &influxdb2::Client,
         bucket: &str,
         field: &str,
-    ) -> Option<f64> {
+    ) -> Result<Option<f64>, String> {
         let flux = format!(
             r#"
                 from(bucket: "{bucket}")
@@ -480,10 +480,9 @@ async fn main() {
         let rows = client
             .query::<Measurement>(Some(InfluxQuery::new(flux)))
             .await
-            .expect("Query failed");
+            .map_err(|e| format!("Influx query for {field} failed: {e}"))?;
 
-        let latest_value = rows.into_iter().next().map(|m| m.value);
-        latest_value
+        Ok(rows.into_iter().next().map(|m| m.value))
     }
 
     #[cfg(feature = "server")]
@@ -564,9 +563,12 @@ async fn main() {
                 match get_access_token().await {
                     Some(token) => match get_weather_forecast(&token, geolocation_id).await {
                         Some(temp) => {
-                            let mut lock = TEMPERATURE_BERN.write().unwrap();
-                            *lock = Some(temp);
-                            println!("Updated Bern temperature: {}", temp);
+                            if let Ok(mut lock) = TEMPERATURE_BERN.write() {
+                                *lock = Some(temp);
+                                println!("Updated Bern temperature: {}", temp);
+                            } else {
+                                eprintln!("Failed to update Bern temperature: lock poisoned.");
+                            }
                         }
                         None => {
                             eprintln!("Failed to get weather forecast");
@@ -577,7 +579,7 @@ async fn main() {
                     }
                 }
 
-                // Update every 1 hour
+                // Poll hourly regardless of success or failure.
                 tokio::time::sleep(std::time::Duration::from_secs(3600)).await;
             }
         });
@@ -941,28 +943,67 @@ async fn main() {
         let bucket = influx_bucket.clone();
 
         tokio::spawn(async move {
+            let mut failure_streak: u32 = 0;
+
             loop {
+                let mut had_connection_failure = false;
+
                 match fetch_current_temperature(&influx, &bucket, "inside_temperature").await {
-                    Some(temp) => {
-                        *CURRENT_INSIDE_TEMPERATURE.write().unwrap() = Some(temp);
-                        println!("Updated CURRENT_INSIDE_TEMPERATURE from Influx: {}", temp);
+                    Ok(Some(temp)) => {
+                        if let Ok(mut lock) = CURRENT_INSIDE_TEMPERATURE.write() {
+                            *lock = Some(temp);
+                            println!("Updated CURRENT_INSIDE_TEMPERATURE from Influx: {}", temp);
+                        } else {
+                            had_connection_failure = true;
+                            eprintln!(
+                                "Failed to update inside_temperature: lock poisoned. Retrying soon."
+                            );
+                        }
                     }
-                    None => {
+                    Ok(None) => {
                         eprintln!("Failed to read inside_temperature from Influx");
+                    }
+                    Err(e) => {
+                        had_connection_failure = true;
+                        eprintln!("{e}");
                     }
                 }
 
                 match fetch_current_temperature(&influx, &bucket, "outside_temperature").await {
-                    Some(temp) => {
-                        *CURRENT_OUTSIDE_TEMPERATURE.write().unwrap() = Some(temp);
-                        println!("Updated CURRENT_OUTSIDE_TEMPERATURE from Influx: {}", temp);
+                    Ok(Some(temp)) => {
+                        if let Ok(mut lock) = CURRENT_OUTSIDE_TEMPERATURE.write() {
+                            *lock = Some(temp);
+                            println!("Updated CURRENT_OUTSIDE_TEMPERATURE from Influx: {}", temp);
+                        } else {
+                            had_connection_failure = true;
+                            eprintln!(
+                                "Failed to update outside_temperature: lock poisoned. Retrying soon."
+                            );
+                        }
                     }
-                    None => {
-                        eprintln!("Failed to read inside_temperature from Influx");
+                    Ok(None) => {
+                        eprintln!("Failed to read outside_temperature from Influx");
+                    }
+                    Err(e) => {
+                        had_connection_failure = true;
+                        eprintln!("{e}");
                     }
                 }
 
-                tokio::time::sleep(std::time::Duration::from_secs(60)).await;
+                let sleep_secs = if had_connection_failure {
+                    failure_streak = failure_streak.saturating_add(1);
+                    let retry_secs = (5u64.saturating_mul(1u64 << failure_streak.min(6))).min(300);
+                    eprintln!(
+                        "vogu.guru temperature updater encountered a connection failure; retrying in {}s",
+                        retry_secs
+                    );
+                    retry_secs
+                } else {
+                    failure_streak = 0;
+                    60
+                };
+
+                tokio::time::sleep(std::time::Duration::from_secs(sleep_secs)).await;
             }
         });
     }

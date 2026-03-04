@@ -42,7 +42,7 @@ pub fn HowItWorks() -> Element {
                             src: FINAL_TWO_IMG,
                             alt: "Inside the birdhouse with camera and sensors"
                         }
-                        figcaption { class: "mt-2 text-sm text-zinc-600", "Figure 1. Camera and sensor placement inside the enclosure." }
+                        figcaption { class: "mt-2 text-sm text-zinc-600", "Figure 1. Camera and sensor placement inside the birdhouse." }
                     }
                     article {
                         h2 { class: "text-2xl font-semibold tracking-tight mb-3", "Components" }
@@ -50,7 +50,7 @@ pub fn HowItWorks() -> Element {
                         p { class: "text-base leading-8 text-zinc-800", "The following components are mounted in the birdhouse:" }
                         ol { class: "list-disc pl-6 mt-2 space-y-1 text-base leading-8 text-zinc-800",
                             li {
-                                "Camera: Raspberry Pi Camera Module v3, NoUIR"
+                                "Camera: Raspberry Pi Camera Module v3, NoIR"
                             }
                             li {
                                 "Temperature/Humidity Sensor: Sensirion SHT41"
@@ -86,7 +86,7 @@ pub fn HowItWorks() -> Element {
                         src: SPECTROGRAM_IMG,
                         alt: "Birdhouse mounted and operating outside"
                     }
-                    figcaption { class: "mt-2 text-sm text-zinc-600", "Figure 2. Audio spectrogram showing the chirp of a common great tit." }
+                    figcaption { class: "mt-2 text-sm text-zinc-600", "Figure 2. Audio spectrogram showing the chirp of a male Great Tit." }
                 }
 
                 p { class: "w-full text-base md:text-lg leading-8 text-zinc-700 mb-10",
@@ -159,7 +159,7 @@ pub fn HowItWorks() -> Element {
                     h3 { class: "text-base font-semibold mb-2", "References" }
                     ol { class: "list-decimal pl-5 space-y-2 text-sm text-zinc-700",
                         li {
-                            "Lind, O., Mitkus, M., Olsson, P., Kelber, A.; Ultraviolet vision in birds: the importance of transparent eye media. Proc Biol Sci 1 January 2014; 281 (1774): 20132209."
+                            "Lind, O., Mitkus, M., Olsson, P., Kelber, A.; Ultraviolet vision in birds: the importance of transparent eye media. Proc Biol Sci 1 January 2014; 281 (1774): 20132209. "
                             a {
                                 class: "underline underline-offset-2",
                                 href: "https://doi.org/10.1098/rspb.2013.2209",
@@ -169,7 +169,7 @@ pub fn HowItWorks() -> Element {
                             }
                         }
                         li {
-                            "Chen, D. M., Goldsmith, T. H. Four spectral classes of cone in the retinas of birds. J Comp Physiol A. 1986 Oct;159(4):473-9."
+                            "Chen, D. M., Goldsmith, T. H. Four spectral classes of cone in the retinas of birds. J Comp Physiol A. 1986 Oct;159(4):473-9. "
                             a {
                                 class: "underline underline-offset-2",
                                 href: "https://doi.org/10.1007/BF00604167",
@@ -179,7 +179,7 @@ pub fn HowItWorks() -> Element {
                             }
                         }
                         li {
-                            "Adekola, S.A., Amusa, K.A. & Biowei, G. Impact of 5G mmWave radiation on human tissue using skin, cornea (eye) and enamel (tooth) as study candidates. J. Eng. Appl. Sci. 72, 51 (2025)."
+                            "Adekola, S.A., Amusa, K.A. & Biowei, G. Impact of 5G mmWave radiation on human tissue using skin, cornea (eye) and enamel (tooth) as study candidates. J. Eng. Appl. Sci. 72, 51 (2025). "
                             a {
                                 class: "underline underline-offset-2",
                                 href: "https://doi.org/10.1186/s44147-025-00617-9",
