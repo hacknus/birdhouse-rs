@@ -74,6 +74,19 @@ pub fn MakingOf() -> Element {
                 line-height: 1.4;
             }}
 
+            .making-of-attribution {{
+                max-width: 1200px;
+                margin: 3rem auto 0;
+                text-align: center;
+                font-size: 0.875rem;
+                color: rgba(255, 255, 255, 0.65);
+            }}
+
+            .making-of-attribution a {{
+                color: inherit;
+                text-decoration: underline;
+            }}
+
             @media (max-width: 768px) {{
                 .making-of-grid {{
                     grid-template-columns: 1fr;
@@ -134,6 +147,16 @@ pub fn MakingOf() -> Element {
                     }
                     div { class: "making-of-caption", "Birdhouse" }
                     div { class: "making-of-description", "The birdhouse is shining in all its glory and ready for check in!" }
+                }
+            }
+
+            p { class: "making-of-attribution",
+                a {
+                    href: "https://www.flaticon.com/free-icons/bird",
+                    title: "bird icons",
+                    target: "_blank",
+                    rel: "noopener noreferrer",
+                    "Bird icons (Favicon) created by Freepik - Flaticon"
                 }
             }
         }

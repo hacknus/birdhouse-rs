@@ -12,13 +12,13 @@ pub fn HowItWorks() -> Element {
                 h1 { class: "text-4xl md:text-5xl font-semibold tracking-tight mb-4", "How It Works" }
                 p { class: "w-full text-base md:text-lg leading-8 text-zinc-700 mb-4",
                     style: "text-align: justify;",
-                    "The birdhouse project is based around a Nistkasten from Vogelwarte Sempbach and upgraded to capture live video and sensor data using a Raspberry Pi. It publishes the stream via mediaMTX, and serves telemetry through this website. Extended live diagnostics are available on "
+                    "The birdhouse project is based around a Nistkasten from Vogelwarte Sempbach and upgraded to capture live video and sensor data using a Raspberry Pi. It publishes the stream via mediaMTX, and serves telemetry through this website. Extended live diagnostics are available "
                     a {
                         class: "font-medium underline decoration-zinc-400 underline-offset-2 hover:decoration-zinc-700",
                         href: "https://linusleo.synology.me/for_nerds",
                         target: "_blank",
                         rel: "noopener noreferrer",
-                        "For Nerds"
+                        "for nerds"
                     }
                     "."
                 }
@@ -188,6 +188,17 @@ pub fn HowItWorks() -> Element {
                                 "https://doi.org/10.1186/s44147-025-00617-9"
                             }
                         }
+                    }
+                }
+
+                p { class: "mt-8 text-sm text-zinc-600",
+                    a {
+                        class: "underline underline-offset-2 hover:text-zinc-800",
+                        href: "https://www.flaticon.com/free-icons/bird",
+                        title: "bird icons",
+                        target: "_blank",
+                        rel: "noopener noreferrer",
+                        "Bird icons (Favicon) created by Freepik - Flaticon"
                     }
                 }
             }
