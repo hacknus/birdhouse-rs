@@ -52,11 +52,16 @@ COPY public ./public
 
 RUN rm -rf ./public/gallery
 
-# ---- Build web bundle ----
+# ---- Build server with dx so asset placeholders are resolved ----
+RUN dx build --release --platform server --features server
+
+# ---- Build web bundle last (server build rewrites target/dx web output) ----
 RUN dx bundle --release --platform web
 
-# ---- Build server ----
-RUN cargo build --release --features server
+# ---- Capture server binary emitted by dx server build ----
+RUN SERVER_BIN="$(find target -type f -path '*/server-release/birdhouse-rs' | head -n 1)" \
+    && test -n "$SERVER_BIN" \
+    && cp "$SERVER_BIN" /app/server
 
 # ---------- Runtime stage ----------
 FROM debian:trixie-slim AS runtime
@@ -72,10 +77,7 @@ RUN mkdir -p /usr/local/app/gallery
 RUN apt-get update && apt-get install -y ca-certificates && rm -rf /var/lib/apt/lists/*
 
 # Copy server binary
-COPY --from=builder /app/target/release/birdhouse-rs ./server
-
-# Copy web output
-COPY --from=builder /app/target/dx/birdhouse-rs/release/web/public ./public
+COPY --from=builder /app/server ./server
 
 ENV PORT=8080
 ENV IP=0.0.0.0
