@@ -6,10 +6,6 @@ use axum::http::HeaderMap;
 use dashmap::DashMap;
 use dioxus::prelude::*;
 #[cfg(feature = "server")]
-use influxdb2::models::Query as InfluxQuery;
-#[cfg(feature = "server")]
-use influxdb2::FromDataPoint;
-#[cfg(feature = "server")]
 use once_cell::sync::Lazy;
 use serde::{Deserialize, Serialize};
 use std::net::IpAddr;
@@ -23,6 +19,8 @@ mod admin;
 mod api;
 mod components;
 mod newsletter;
+#[cfg(feature = "server")]
+mod postgres_store;
 mod views;
 
 #[cfg(feature = "server")]
@@ -274,8 +272,7 @@ async fn main() {
         response::Redirect,
         routing::get,
     };
-    use futures::stream;
-    use influxdb2::{models::DataPoint, Client as InfluxClient};
+    use crate::postgres_store::{PostgresTimeSeriesStore, TimeSeriesValue};
     use once_cell::sync::Lazy;
     use std::net::SocketAddr;
     use std::sync::atomic::{AtomicUsize, Ordering};
@@ -283,7 +280,9 @@ async fn main() {
     use tokio::time::{interval, Duration};
     use tower_http::services::ServeDir;
 
-    dotenv::dotenv().ok();
+    if let Err(e) = dotenv::dotenv() {
+        eprintln!("Failed to load .env: {e}");
+    }
 
     #[derive(Deserialize)]
     struct AdminPasswordLoginRequest {
@@ -659,40 +658,16 @@ async fn main() {
 
     #[cfg(feature = "server")]
     async fn fetch_current_temperature(
-        client: &influxdb2::Client,
+        store: &PostgresTimeSeriesStore,
         bucket: &str,
         field: &str,
     ) -> Result<Option<f64>, String> {
-        let flux = format!(
-            r#"
-                from(bucket: "{bucket}")
-                  |> range(start: -24h)
-                  |> filter(fn: (r) => r._measurement == "voegeli")
-                  |> filter(fn: (r) => r._field == "{field}")
-                  |> last()
-                "#,
-            bucket = bucket
-        );
-
-        client.query_suggestions().await.ok();
-        client.query_suggestions_name("some-name").await.ok();
-
-        #[derive(FromDataPoint)]
-        struct Measurement {
-            value: f64,
-        }
-        impl Default for Measurement {
-            fn default() -> Self {
-                Self { value: 0f64 }
-            }
-        }
-
-        let rows = client
-            .query::<Measurement>(Some(InfluxQuery::new(flux)))
+        let value = store
+            .query_last_f64("24h", Some(bucket), field, None)
             .await
-            .map_err(|e| format!("Influx query for {field} failed: {e}"))?;
+            .map_err(|e| format!("PostgreSQL query for {field} failed: {e}"))?;
 
-        Ok(rows.into_iter().next().map(|m| m.value))
+        Ok(value)
     }
 
     #[cfg(feature = "server")]
@@ -734,7 +709,7 @@ async fn main() {
 
         let hours = json.get("hours")?.as_array()?;
 
-        use chrono::{Timelike, Utc};
+        use chrono::Utc;
 
         let now = Utc::now();
         let mut best: Option<(chrono::DateTime<Utc>, f64)> = None;
@@ -1137,20 +1112,14 @@ async fn main() {
         }
     }
 
-    let influx_url = std::env::var("INFLUXDB_URL").expect("INFLUXDB_URL not set");
-    let influx_org = std::env::var("INFLUXDB_ORG").expect("INFLUXDB_ORG not set");
-    let influx_token = std::env::var("INFLUXDB_TOKEN")
-        .expect("INFLUXDB_TOKEN not set")
-        .trim()
-        .to_string();
-
-    let influx_bucket = std::env::var("INFLUXDB_BUCKET").expect("INFLUXDB_BUCKET not set");
-    let influx = InfluxClient::new(influx_url, influx_org, influx_token);
+    let postgres_store =
+        PostgresTimeSeriesStore::from_env().expect("PostgreSQL env vars are invalid");
+    let postgres_bucket = postgres_store.bucket().to_string();
 
     #[cfg(feature = "server")]
     {
-        let influx = influx.clone();
-        let bucket = influx_bucket.clone();
+        let store = postgres_store.clone();
+        let bucket = postgres_bucket.clone();
 
         tokio::spawn(async move {
             let mut failure_streak: u32 = 0;
@@ -1158,11 +1127,11 @@ async fn main() {
             loop {
                 let mut had_connection_failure = false;
 
-                match fetch_current_temperature(&influx, &bucket, "inside_temperature").await {
+                match fetch_current_temperature(&store, &bucket, "inside_temperature").await {
                     Ok(Some(temp)) => {
                         if let Ok(mut lock) = CURRENT_INSIDE_TEMPERATURE.write() {
                             *lock = Some(temp);
-                            println!("Updated CURRENT_INSIDE_TEMPERATURE from Influx: {}", temp);
+                            println!("Updated CURRENT_INSIDE_TEMPERATURE from PostgreSQL: {}", temp);
                         } else {
                             had_connection_failure = true;
                             eprintln!(
@@ -1171,7 +1140,7 @@ async fn main() {
                         }
                     }
                     Ok(None) => {
-                        eprintln!("Failed to read inside_temperature from Influx");
+                        eprintln!("Failed to read inside_temperature from PostgreSQL");
                     }
                     Err(e) => {
                         had_connection_failure = true;
@@ -1179,11 +1148,11 @@ async fn main() {
                     }
                 }
 
-                match fetch_current_temperature(&influx, &bucket, "outside_temperature").await {
+                match fetch_current_temperature(&store, &bucket, "outside_temperature").await {
                     Ok(Some(temp)) => {
                         if let Ok(mut lock) = CURRENT_OUTSIDE_TEMPERATURE.write() {
                             *lock = Some(temp);
-                            println!("Updated CURRENT_OUTSIDE_TEMPERATURE from Influx: {}", temp);
+                            println!("Updated CURRENT_OUTSIDE_TEMPERATURE from PostgreSQL: {}", temp);
                         } else {
                             had_connection_failure = true;
                             eprintln!(
@@ -1192,7 +1161,7 @@ async fn main() {
                         }
                     }
                     Ok(None) => {
-                        eprintln!("Failed to read outside_temperature from Influx");
+                        eprintln!("Failed to read outside_temperature from PostgreSQL");
                     }
                     Err(e) => {
                         had_connection_failure = true;
@@ -1204,7 +1173,7 @@ async fn main() {
                     failure_streak = failure_streak.saturating_add(1);
                     let retry_secs = (5u64.saturating_mul(1u64 << failure_streak.min(6))).min(300);
                     eprintln!(
-                        "vogu.guru temperature updater encountered a connection failure; retrying in {}s",
+                        "vogu.guru temperature updater encountered a PostgreSQL failure; retrying in {}s",
                         retry_secs
                     );
                     retry_secs
@@ -1237,8 +1206,8 @@ async fn main() {
     });
 
     tokio::spawn({
-        let influx = influx.clone();
-        let bucket = influx_bucket.to_string();
+        let store = postgres_store.clone();
+        let bucket = postgres_bucket.clone();
 
         async move {
             let mut ticker = interval(Duration::from_secs(10));
@@ -1248,13 +1217,19 @@ async fn main() {
 
                 let users = ACTIVE_USERS.load(Ordering::Relaxed);
 
-                let point = DataPoint::builder("voegeli")
-                    .field("visitors", users as i64)
-                    .build()
-                    .unwrap();
-
-                if let Err(e) = influx.write(&bucket, stream::iter(vec![point])).await {
-                    eprintln!("InfluxDB write failed: {}", e);
+                if let Err(e) = store
+                    .write_field(
+                        "voegeli",
+                        "visitors",
+                        TimeSeriesValue::Double(users as f64),
+                        None,
+                        None,
+                        None,
+                        Some(&bucket),
+                    )
+                    .await
+                {
+                    eprintln!("PostgreSQL write failed: {}", e);
                 }
             }
         }
