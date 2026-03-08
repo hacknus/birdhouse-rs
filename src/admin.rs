@@ -98,18 +98,57 @@ static PASSKEY_AUTH_FLOWS: Lazy<DashMap<String, PasskeyAuthenticationFlow>> =
 
 #[cfg(feature = "server")]
 static ADMIN_WEBAUTHN: Lazy<Result<Webauthn, String>> = Lazy::new(|| {
+    fn normalize_rp_id(raw: &str) -> String {
+        let trimmed = raw.trim();
+        if trimmed.is_empty() {
+            return String::new();
+        }
+
+        if trimmed.contains("://") {
+            if let Ok(url) = reqwest::Url::parse(trimmed) {
+                if let Some(host) = url.host_str() {
+                    return host.trim().trim_matches('.').to_string();
+                }
+            }
+        }
+
+        trimmed
+            .split('/')
+            .next()
+            .unwrap_or(trimmed)
+            .split(':')
+            .next()
+            .unwrap_or(trimmed)
+            .trim()
+            .trim_matches('.')
+            .to_string()
+    }
+
     let origin_raw = std::env::var("ADMIN_WEBAUTHN_ORIGIN").unwrap_or_else(|_| {
-        let port = std::env::var("PORT").unwrap_or_else(|_| "8080".to_string());
+        let port = std::env::var("ADMIN_WEBAUTHN_PORT").unwrap_or_else(|_| "8080".to_string());
         format!("http://localhost:{}", port)
     });
     let origin = reqwest::Url::parse(&origin_raw)
         .map_err(|e| format!("Invalid ADMIN_WEBAUTHN_ORIGIN: {}", e))?;
+    let origin_host = origin
+        .host_str()
+        .ok_or_else(|| "ADMIN_WEBAUTHN_ORIGIN is missing a valid host.".to_string())?
+        .to_string();
 
-    let rp_id = std::env::var("ADMIN_WEBAUTHN_RP_ID")
+    let configured_rp_id = std::env::var("ADMIN_WEBAUTHN_RP_ID")
         .ok()
         .filter(|v| !v.trim().is_empty())
-        .or_else(|| origin.host_str().map(|v| v.to_string()))
-        .unwrap_or_else(|| "localhost".to_string());
+        .map(|v| normalize_rp_id(&v));
+    let mut rp_id = configured_rp_id
+        .filter(|v| !v.is_empty())
+        .unwrap_or_else(|| origin_host.clone());
+    if origin_host != rp_id && !origin_host.ends_with(&format!(".{}", rp_id)) {
+        eprintln!(
+            "ADMIN_WEBAUTHN_RP_ID='{}' is incompatible with origin host '{}'; falling back to '{}'",
+            rp_id, origin_host, origin_host
+        );
+        rp_id = origin_host.clone();
+    }
 
     let rp_name = std::env::var("ADMIN_WEBAUTHN_RP_NAME")
         .ok()

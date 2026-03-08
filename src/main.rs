@@ -361,6 +361,38 @@ async fn main() {
         StatusCode::INTERNAL_SERVER_ERROR
     }
 
+    fn expected_webauthn_origin() -> String {
+        std::env::var("ADMIN_WEBAUTHN_ORIGIN")
+            .ok()
+            .map(|v| v.trim().trim_end_matches('/').to_string())
+            .filter(|v| !v.is_empty())
+            .unwrap_or_else(|| {
+                let port = std::env::var("PORT").unwrap_or_else(|_| "8080".to_string());
+                format!("http://localhost:{}", port)
+            })
+    }
+
+    fn validate_webauthn_origin(headers: &HeaderMap) -> Result<(), String> {
+        let request_origin = headers
+            .get("origin")
+            .and_then(|v| v.to_str().ok())
+            .map(|v| v.trim().trim_end_matches('/').to_string())
+            .unwrap_or_default();
+        if request_origin.is_empty() {
+            return Ok(());
+        }
+
+        let expected_origin = expected_webauthn_origin();
+        if request_origin != expected_origin {
+            return Err(format!(
+                "WebAuthn origin mismatch. Request origin is '{}', but ADMIN_WEBAUTHN_ORIGIN is '{}'.",
+                request_origin, expected_origin
+            ));
+        }
+
+        Ok(())
+    }
+
     async fn admin_password_login(
         Json(payload): Json<AdminPasswordLoginRequest>,
     ) -> impl IntoResponse {
@@ -387,8 +419,12 @@ async fn main() {
     }
 
     async fn admin_begin_passkey_login(
+        headers: HeaderMap,
         Json(payload): Json<AdminPasskeyBeginLoginRequest>,
     ) -> impl IntoResponse {
+        if let Err(err) = validate_webauthn_origin(&headers) {
+            return (StatusCode::BAD_REQUEST, Json(AdminApiError { error: err })).into_response();
+        }
         match crate::admin::admin_begin_passkey_login(&payload.email) {
             Ok(result) => (
                 StatusCode::OK,
@@ -418,8 +454,12 @@ async fn main() {
     }
 
     async fn admin_begin_passkey_registration(
+        headers: HeaderMap,
         Json(payload): Json<AdminPasskeyBeginRegistrationRequest>,
     ) -> impl IntoResponse {
+        if let Err(err) = validate_webauthn_origin(&headers) {
+            return (StatusCode::BAD_REQUEST, Json(AdminApiError { error: err })).into_response();
+        }
         match crate::admin::admin_begin_passkey_registration(&payload.token) {
             Ok(result) => (
                 StatusCode::OK,
