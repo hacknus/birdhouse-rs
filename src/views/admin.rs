@@ -37,6 +37,12 @@ struct AdminPasswordLoginApiResponse {
 
 #[cfg(target_arch = "wasm32")]
 #[derive(Clone, Debug, Deserialize)]
+struct AdminPasskeyLoginApiResponse {
+    token: String,
+}
+
+#[cfg(target_arch = "wasm32")]
+#[derive(Clone, Debug, Deserialize)]
 struct AdminValidateSessionApiResponse {
     valid: bool,
 }
@@ -135,6 +141,104 @@ async fn admin_validate_session_http(token: String) -> Result<bool, String> {
     Err(parse_admin_api_error(&text, status))
 }
 
+#[cfg(target_arch = "wasm32")]
+async fn admin_begin_passkey_login_http(email: String) -> Result<PasskeyBeginResultView, String> {
+    let body = serde_json::json!({ "email": email }).to_string();
+    let response = Request::post("/api/admin/passkey/begin-login")
+        .header("content-type", "application/json")
+        .body(body)
+        .map_err(|e| format!("Failed to build passkey login request: {}", e))?
+        .send()
+        .await
+        .map_err(|e| format!("Passkey login request failed: {}", e))?;
+
+    let status = response.status();
+    let text = response.text().await.unwrap_or_default();
+    if status >= 200 && status < 300 {
+        return serde_json::from_str::<PasskeyBeginResultView>(&text)
+            .map_err(|e| format!("Invalid passkey login response: {}", e));
+    }
+    Err(parse_admin_api_error(&text, status))
+}
+
+#[cfg(target_arch = "wasm32")]
+async fn admin_finish_passkey_login_http(
+    flow_id: String,
+    credential_json: String,
+) -> Result<String, String> {
+    let body = serde_json::json!({
+        "flow_id": flow_id,
+        "credential_json": credential_json
+    })
+    .to_string();
+    let response = Request::post("/api/admin/passkey/finish-login")
+        .header("content-type", "application/json")
+        .body(body)
+        .map_err(|e| format!("Failed to build passkey finish login request: {}", e))?
+        .send()
+        .await
+        .map_err(|e| format!("Passkey finish login request failed: {}", e))?;
+
+    let status = response.status();
+    let text = response.text().await.unwrap_or_default();
+    if status >= 200 && status < 300 {
+        let payload = serde_json::from_str::<AdminPasskeyLoginApiResponse>(&text)
+            .map_err(|e| format!("Invalid passkey login response: {}", e))?;
+        return Ok(payload.token);
+    }
+    Err(parse_admin_api_error(&text, status))
+}
+
+#[cfg(target_arch = "wasm32")]
+async fn admin_begin_passkey_registration_http(
+    token: String,
+) -> Result<PasskeyBeginResultView, String> {
+    let body = serde_json::json!({ "token": token }).to_string();
+    let response = Request::post("/api/admin/passkey/begin-registration")
+        .header("content-type", "application/json")
+        .body(body)
+        .map_err(|e| format!("Failed to build passkey registration request: {}", e))?
+        .send()
+        .await
+        .map_err(|e| format!("Passkey registration request failed: {}", e))?;
+
+    let status = response.status();
+    let text = response.text().await.unwrap_or_default();
+    if status >= 200 && status < 300 {
+        return serde_json::from_str::<PasskeyBeginResultView>(&text)
+            .map_err(|e| format!("Invalid passkey registration response: {}", e));
+    }
+    Err(parse_admin_api_error(&text, status))
+}
+
+#[cfg(target_arch = "wasm32")]
+async fn admin_finish_passkey_registration_http(
+    token: String,
+    flow_id: String,
+    credential_json: String,
+) -> Result<(), String> {
+    let body = serde_json::json!({
+        "token": token,
+        "flow_id": flow_id,
+        "credential_json": credential_json
+    })
+    .to_string();
+    let response = Request::post("/api/admin/passkey/finish-registration")
+        .header("content-type", "application/json")
+        .body(body)
+        .map_err(|e| format!("Failed to build passkey finish registration request: {}", e))?
+        .send()
+        .await
+        .map_err(|e| format!("Passkey finish registration request failed: {}", e))?;
+
+    let status = response.status();
+    let text = response.text().await.unwrap_or_default();
+    if status >= 200 && status < 300 {
+        return Ok(());
+    }
+    Err(parse_admin_api_error(&text, status))
+}
+
 #[cfg(not(target_arch = "wasm32"))]
 async fn admin_password_login_http(_email: String, _password: String) -> Result<String, String> {
     Err("Password login HTTP is only available in the browser.".to_string())
@@ -143,6 +247,35 @@ async fn admin_password_login_http(_email: String, _password: String) -> Result<
 #[cfg(not(target_arch = "wasm32"))]
 async fn admin_validate_session_http(_token: String) -> Result<bool, String> {
     Ok(false)
+}
+
+#[cfg(not(target_arch = "wasm32"))]
+async fn admin_begin_passkey_login_http(_email: String) -> Result<PasskeyBeginResultView, String> {
+    Err("Passkey login HTTP is only available in the browser.".to_string())
+}
+
+#[cfg(not(target_arch = "wasm32"))]
+async fn admin_finish_passkey_login_http(
+    _flow_id: String,
+    _credential_json: String,
+) -> Result<String, String> {
+    Err("Passkey login HTTP is only available in the browser.".to_string())
+}
+
+#[cfg(not(target_arch = "wasm32"))]
+async fn admin_begin_passkey_registration_http(
+    _token: String,
+) -> Result<PasskeyBeginResultView, String> {
+    Err("Passkey registration HTTP is only available in the browser.".to_string())
+}
+
+#[cfg(not(target_arch = "wasm32"))]
+async fn admin_finish_passkey_registration_http(
+    _token: String,
+    _flow_id: String,
+    _credential_json: String,
+) -> Result<(), String> {
+    Err("Passkey registration HTTP is only available in the browser.".to_string())
 }
 
 #[cfg(target_arch = "wasm32")]
@@ -531,6 +664,12 @@ async fn admin_list_gallery_images_server(
             let entry =
                 entry.map_err(|e| ServerFnError::new(format!("Failed to read entry: {}", e)))?;
             let path = entry.path();
+            let metadata = entry
+                .metadata()
+                .map_err(|e| ServerFnError::new(format!("Failed to stat entry: {}", e)))?;
+            if metadata.len() == 0 {
+                continue;
+            }
             let ext = path
                 .extension()
                 .and_then(|s| s.to_str())
@@ -702,9 +841,12 @@ pub fn Admin() -> Element {
         let token = admin_token();
         async move {
             if let Some(token) = token {
-                admin_list_gallery_images_server(token).await.ok()
+                admin_list_gallery_images_server(token)
+                    .await
+                    .map(Some)
+                    .map_err(|e| e.to_string())
             } else {
-                None
+                Ok(None)
             }
         }
     });
@@ -937,10 +1079,10 @@ pub fn Admin() -> Element {
                                     login_feedback.set(Some(start_msg));
                                     spawn(async move {
                                         let result = async {
-                                            let begin = admin_begin_passkey_login_server(email).await
+                                            let begin = admin_begin_passkey_login_http(email).await
                                                 .map_err(|e| e.to_string())?;
                                             let credential_json = run_webauthn_get(&begin.options_json).await?;
-                                            let token = admin_finish_passkey_login_server(begin.flow_id, credential_json).await
+                                            let token = admin_finish_passkey_login_http(begin.flow_id, credential_json).await
                                                 .map_err(|e| e.to_string())?;
                                             Ok::<String, String>(token)
                                         }.await;
@@ -1076,10 +1218,10 @@ pub fn Admin() -> Element {
                                     status.set(None);
                                     spawn(async move {
                                         let result = async {
-                                            let begin = admin_begin_passkey_registration_server(token.clone()).await
+                                            let begin = admin_begin_passkey_registration_http(token.clone()).await
                                                 .map_err(|e| e.to_string())?;
                                             let credential_json = run_webauthn_create(&begin.options_json).await?;
-                                            admin_finish_passkey_registration_server(token, begin.flow_id, credential_json).await
+                                            admin_finish_passkey_registration_http(token, begin.flow_id, credential_json).await
                                                 .map_err(|e| e.to_string())?;
                                             Ok::<(), String>(())
                                         }.await;
@@ -1191,7 +1333,7 @@ pub fn Admin() -> Element {
                         h2 { class: "text-xl font-medium", "Gallery Manager" }
                         p { class: "text-slate-300 text-sm", "Delete existing pictures from the gallery." }
 
-                        if let Some(images) = gallery_resource.read().as_ref().and_then(|v| v.as_ref()) {
+                        if let Some(Ok(Some(images))) = gallery_resource.read().as_ref() {
                             if images.is_empty() {
                                 p { class: "text-slate-300", "Gallery is empty." }
                             } else {
@@ -1244,6 +1386,10 @@ pub fn Admin() -> Element {
                                     }
                                 }
                             }
+                        } else if let Some(Err(err)) = gallery_resource.read().as_ref() {
+                            p { class: "text-sm text-red-300 break-all", "Failed to load gallery: {err}" }
+                        } else if let Some(Ok(None)) = gallery_resource.read().as_ref() {
+                            p { class: "text-slate-300", "Please sign in to load gallery items." }
                         } else {
                             p { class: "text-slate-300", "Loading gallery..." }
                         }

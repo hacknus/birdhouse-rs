@@ -61,7 +61,11 @@ pub async fn serve_gallery_thumbnail(AxumPath(filename): AxumPath<String>) -> im
     };
 
     let source_path = PathBuf::from(GALLERY_DIR).join(&safe_filename);
-    if fs::metadata(&source_path).await.is_err() {
+    let source_meta = match fs::metadata(&source_path).await {
+        Ok(meta) => meta,
+        Err(_) => return (StatusCode::NOT_FOUND, "image not found").into_response(),
+    };
+    if source_meta.len() == 0 {
         return (StatusCode::NOT_FOUND, "image not found").into_response();
     }
 
@@ -115,7 +119,12 @@ pub async fn serve_gallery_thumbnail(AxumPath(filename): AxumPath<String>) -> im
     .await
     {
         Ok(Ok(bytes)) => bytes,
-        Ok(Err(msg)) => return (StatusCode::INTERNAL_SERVER_ERROR, msg).into_response(),
+        Ok(Err(msg)) => {
+            if msg.contains("decode failed") || msg.contains("format guess failed") {
+                return (StatusCode::UNPROCESSABLE_ENTITY, "invalid image").into_response();
+            }
+            return (StatusCode::INTERNAL_SERVER_ERROR, msg).into_response();
+        }
         Err(e) => {
             return (
                 StatusCode::INTERNAL_SERVER_ERROR,

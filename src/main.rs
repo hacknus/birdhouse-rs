@@ -299,6 +299,29 @@ async fn main() {
         token: String,
     }
 
+    #[derive(Deserialize)]
+    struct AdminPasskeyBeginLoginRequest {
+        email: String,
+    }
+
+    #[derive(Deserialize)]
+    struct AdminPasskeyFinishLoginRequest {
+        flow_id: String,
+        credential_json: String,
+    }
+
+    #[derive(Deserialize)]
+    struct AdminPasskeyBeginRegistrationRequest {
+        token: String,
+    }
+
+    #[derive(Deserialize)]
+    struct AdminPasskeyFinishRegistrationRequest {
+        token: String,
+        flow_id: String,
+        credential_json: String,
+    }
+
     #[derive(Serialize)]
     struct AdminPasswordLoginResponse {
         token: String,
@@ -310,8 +333,32 @@ async fn main() {
     }
 
     #[derive(Serialize)]
+    struct AdminPasskeyBeginResponse {
+        flow_id: String,
+        options_json: String,
+    }
+
+    #[derive(Serialize)]
+    struct AdminPasskeyLoginResponse {
+        token: String,
+    }
+
+    #[derive(Serialize)]
     struct AdminApiError {
         error: String,
+    }
+
+    fn admin_error_status(err: &str) -> StatusCode {
+        if err.contains("Unauthorized") || err.contains("Invalid admin credentials") {
+            return StatusCode::UNAUTHORIZED;
+        }
+        if err.contains("expired")
+            || err.contains("Invalid passkey")
+            || err.contains("No passkey configured")
+        {
+            return StatusCode::BAD_REQUEST;
+        }
+        StatusCode::INTERNAL_SERVER_ERROR
     }
 
     async fn admin_password_login(
@@ -337,6 +384,70 @@ async fn main() {
     ) -> impl IntoResponse {
         let valid = crate::admin::admin_validate_session(&payload.token);
         (StatusCode::OK, Json(AdminValidateSessionResponse { valid })).into_response()
+    }
+
+    async fn admin_begin_passkey_login(
+        Json(payload): Json<AdminPasskeyBeginLoginRequest>,
+    ) -> impl IntoResponse {
+        match crate::admin::admin_begin_passkey_login(&payload.email) {
+            Ok(result) => (
+                StatusCode::OK,
+                Json(AdminPasskeyBeginResponse {
+                    flow_id: result.flow_id,
+                    options_json: result.options_json,
+                }),
+            )
+                .into_response(),
+            Err(err) => {
+                (admin_error_status(&err), Json(AdminApiError { error: err })).into_response()
+            }
+        }
+    }
+
+    async fn admin_finish_passkey_login(
+        Json(payload): Json<AdminPasskeyFinishLoginRequest>,
+    ) -> impl IntoResponse {
+        match crate::admin::admin_finish_passkey_login(&payload.flow_id, &payload.credential_json) {
+            Ok(token) => {
+                (StatusCode::OK, Json(AdminPasskeyLoginResponse { token })).into_response()
+            }
+            Err(err) => {
+                (admin_error_status(&err), Json(AdminApiError { error: err })).into_response()
+            }
+        }
+    }
+
+    async fn admin_begin_passkey_registration(
+        Json(payload): Json<AdminPasskeyBeginRegistrationRequest>,
+    ) -> impl IntoResponse {
+        match crate::admin::admin_begin_passkey_registration(&payload.token) {
+            Ok(result) => (
+                StatusCode::OK,
+                Json(AdminPasskeyBeginResponse {
+                    flow_id: result.flow_id,
+                    options_json: result.options_json,
+                }),
+            )
+                .into_response(),
+            Err(err) => {
+                (admin_error_status(&err), Json(AdminApiError { error: err })).into_response()
+            }
+        }
+    }
+
+    async fn admin_finish_passkey_registration(
+        Json(payload): Json<AdminPasskeyFinishRegistrationRequest>,
+    ) -> impl IntoResponse {
+        match crate::admin::admin_finish_passkey_registration(
+            &payload.token,
+            &payload.flow_id,
+            &payload.credential_json,
+        ) {
+            Ok(()) => (StatusCode::OK, Json(serde_json::json!({ "ok": true }))).into_response(),
+            Err(err) => {
+                (admin_error_status(&err), Json(AdminApiError { error: err })).into_response()
+            }
+        }
     }
 
     async fn redirect_unsubscribe(Path(encoded_email): Path<String>) -> Redirect {
@@ -1157,6 +1268,22 @@ async fn main() {
         .route("/api/upload_image", post(upload_image_multipart))
         .route("/api/admin/password-login", post(admin_password_login))
         .route("/api/admin/validate-session", post(admin_validate_session))
+        .route(
+            "/api/admin/passkey/begin-login",
+            post(admin_begin_passkey_login),
+        )
+        .route(
+            "/api/admin/passkey/finish-login",
+            post(admin_finish_passkey_login),
+        )
+        .route(
+            "/api/admin/passkey/begin-registration",
+            post(admin_begin_passkey_registration),
+        )
+        .route(
+            "/api/admin/passkey/finish-registration",
+            post(admin_finish_passkey_registration),
+        )
         .route(
             "/gallery-thumbnails/{filename}",
             get(serve_gallery_thumbnail),
