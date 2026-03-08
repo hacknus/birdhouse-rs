@@ -16,9 +16,10 @@ use std::net::IpAddr;
 #[cfg(feature = "server")]
 use uuid::Uuid;
 use views::{
-    ForNerds, Gallery, Home, HowItWorks, MakingOf, Navbar, Newsletter, Unsubscribe, VoguGuru,
+    Admin, ForNerds, Gallery, Home, HowItWorks, MakingOf, Navbar, Newsletter, Unsubscribe, VoguGuru,
 };
 
+mod admin;
 mod api;
 mod components;
 mod newsletter;
@@ -148,6 +149,9 @@ enum Route {
 
         #[route("/for_nerds")]
         ForNerds {},
+
+        #[route("/admin")]
+        Admin {},
 }
 
 const FAVICON: Asset = asset!("/assets/favicon.ico");
@@ -261,6 +265,7 @@ async fn main() {
     use axum::{
         body::Body,
         extract::ws::{WebSocket, WebSocketUpgrade},
+        extract::Json,
         extract::OriginalUri,
         extract::Path,
         http::Response,
@@ -279,6 +284,60 @@ async fn main() {
     use tower_http::services::ServeDir;
 
     dotenv::dotenv().ok();
+
+    #[derive(Deserialize)]
+    struct AdminPasswordLoginRequest {
+        #[serde(default)]
+        email: String,
+        #[serde(default, alias = "username")]
+        username: String,
+        password: String,
+    }
+
+    #[derive(Deserialize)]
+    struct AdminValidateSessionRequest {
+        token: String,
+    }
+
+    #[derive(Serialize)]
+    struct AdminPasswordLoginResponse {
+        token: String,
+    }
+
+    #[derive(Serialize)]
+    struct AdminValidateSessionResponse {
+        valid: bool,
+    }
+
+    #[derive(Serialize)]
+    struct AdminApiError {
+        error: String,
+    }
+
+    async fn admin_password_login(
+        Json(payload): Json<AdminPasswordLoginRequest>,
+    ) -> impl IntoResponse {
+        let email = if payload.email.trim().is_empty() {
+            payload.username.trim().to_string()
+        } else {
+            payload.email.trim().to_string()
+        };
+        match crate::admin::admin_login_password(&email, &payload.password) {
+            Ok(token) => {
+                (StatusCode::OK, Json(AdminPasswordLoginResponse { token })).into_response()
+            }
+            Err(err) => {
+                (StatusCode::UNAUTHORIZED, Json(AdminApiError { error: err })).into_response()
+            }
+        }
+    }
+
+    async fn admin_validate_session(
+        Json(payload): Json<AdminValidateSessionRequest>,
+    ) -> impl IntoResponse {
+        let valid = crate::admin::admin_validate_session(&payload.token);
+        (StatusCode::OK, Json(AdminValidateSessionResponse { valid })).into_response()
+    }
 
     async fn redirect_unsubscribe(Path(encoded_email): Path<String>) -> Redirect {
         Redirect::temporary(&format!("/unsubscribe/{}", encoded_email))
@@ -1096,6 +1155,8 @@ async fn main() {
 
     let router = Router::new()
         .route("/api/upload_image", post(upload_image_multipart))
+        .route("/api/admin/password-login", post(admin_password_login))
+        .route("/api/admin/validate-session", post(admin_validate_session))
         .route(
             "/gallery-thumbnails/{filename}",
             get(serve_gallery_thumbnail),

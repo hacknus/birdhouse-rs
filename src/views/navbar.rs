@@ -10,6 +10,7 @@ pub fn Navbar() -> Element {
     let current_route = use_route::<Route>();
 
     let show_nerds = matches!(current_route, Route::ForNerds {});
+    let show_admin = matches!(current_route, Route::Admin {});
 
     let selected = match current_route {
         Route::Home {} => "home",
@@ -20,6 +21,7 @@ pub fn Navbar() -> Element {
         Route::Newsletter {} => "newsletter",
         Route::Unsubscribe { .. } => "newsletter",
         Route::ForNerds {} => "nerds",
+        Route::Admin {} => "admin",
     };
 
     rsx! {
@@ -42,6 +44,9 @@ pub fn Navbar() -> Element {
                 if show_nerds {
                     Link { to: Route::ForNerds {}, "For Nerds" }
                 }
+                if show_admin {
+                    Link { to: Route::Admin {}, "Admin" }
+                }
             }
 
             div {
@@ -60,6 +65,7 @@ pub fn Navbar() -> Element {
                             "newsletter" => Some(Route::Newsletter {}),
                             "vogu" => Some(Route::VoguGuru {}),
                             "nerds" => Some(Route::ForNerds {}),
+                            "admin" => Some(Route::Admin {}),
                             _ => None,
                         };
 
@@ -77,6 +83,9 @@ pub fn Navbar() -> Element {
 
                     if show_nerds {
                         option { value: "nerds", "For Nerds" }
+                    }
+                    if show_admin {
+                        option { value: "admin", "Admin" }
                     }
                 }
             }

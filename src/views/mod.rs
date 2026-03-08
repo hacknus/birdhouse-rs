@@ -35,3 +35,6 @@ pub use newsletter::Newsletter;
 
 mod unsubscribe;
 pub use unsubscribe::Unsubscribe;
+
+mod admin;
+pub use admin::Admin;

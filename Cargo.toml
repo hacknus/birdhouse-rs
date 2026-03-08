@@ -51,11 +51,15 @@ uuid = { version = "1.19", features = ["v4", "js", "serde"] }
 dashmap = "6.1.0"
 num-traits = "0.2"
 image = { version = "0.25.8", default-features = false, features = ["jpeg", "png", "gif", "webp"], optional = true }
+sha2 = { version = "0.10.9", optional = true }
+webauthn-rs = { version = "0.5.3", optional = true }
 
 # WASM-only dependencies (only compiled for web target)
 [target.'cfg(target_arch = "wasm32")'.dependencies]
 web-sys = { version = "0.3.83", features = ["Storage", "Window"] }
 wasm-bindgen = "0.2.106"
+wasm-bindgen-futures = "0.4.56"
+gloo-net = { version = "0.6.0", features = ["http"] }
 getrandom = { version = "0.3", features = ["wasm_js"] }
 gloo-timers = { version = "0.3", features = ["futures"] }
 
@@ -76,4 +80,6 @@ server = [
     "dep:influxdb2-structmap",
     "dep:futures",
     "dep:image",
+    "dep:sha2",
+    "dep:webauthn-rs",
 ]
