@@ -1,5 +1,7 @@
 // File: `src/views/gallery.rs`
 use dioxus::prelude::*;
+#[cfg(target_arch = "wasm32")]
+use js_sys::eval;
 use serde::{Deserialize, Serialize};
 
 use crate::views::gallery_client::{lock_scroll, save_scroll_position, unlock_scroll};
@@ -8,11 +10,14 @@ use std::path::Path;
 const ARROW_LEFT: Asset = asset!("/assets/svg/arrow-left-svgrepo-com.svg");
 const ARROW_RIGHT: Asset = asset!("/assets/svg/arrow-right-svgrepo-com.svg");
 const DOWNLOAD_SVG: Asset = asset!("/assets/svg/download.svg");
+const THUMB_PLACEHOLDER: &str =
+    "data:image/gif;base64,R0lGODlhAQABAIAAAAAAAP///ywAAAAAAQABAAACAUwAOw==";
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 struct ImageInfo {
     filename: String,
     url: String,
+    thumbnail_url: String,
 }
 
 // parse filename -> display string (tries to decode YYYYMMDD[ _- ]HHMMSS formats)
@@ -357,7 +362,7 @@ fn ImageViewer(
                         div { style: "{inner_slide_style}",
                             img {
                                 style: "{img_style}",
-                                src: images[prev_index].url.clone(),
+                                src: images[prev_index].thumbnail_url.clone(),
                                 alt: "{prev_display}",
                                 class: "rounded-lg",
                             }
@@ -379,7 +384,7 @@ fn ImageViewer(
                         div { style: "{inner_slide_style}",
                             img {
                                 style: "{img_style}",
-                                src: images[next_index].url.clone(),
+                                src: images[next_index].thumbnail_url.clone(),
                                 alt: "{next_display}",
                                 class: "rounded-lg",
                             }
@@ -405,6 +410,60 @@ pub fn Gallery() -> Element {
     let mut selected_image = use_signal(|| None::<usize>);
     let mut loading = use_signal(|| true);
     let mut error = use_signal(|| None::<String>);
+
+    #[cfg(target_arch = "wasm32")]
+    use_effect(move || {
+        // Re-run when the image list changes so newly rendered cards are observed.
+        let _ = images().len();
+
+        let _ = eval(
+            r#"
+            (() => {
+              const lazyImages = Array.from(document.querySelectorAll('img[data-lazy-thumb="true"]'));
+              if (!lazyImages.length) return;
+
+              const loadNow = (img) => {
+                if (!img || img.dataset.loaded === "1") return;
+                const src = img.dataset.thumbSrc;
+                if (!src) return;
+                img.src = src;
+                img.dataset.loaded = "1";
+                img.removeAttribute("data-thumb-src");
+              };
+
+              if (!("IntersectionObserver" in window)) {
+                lazyImages.forEach(loadNow);
+                return;
+              }
+
+              if (!window.__galleryThumbObserver) {
+                window.__galleryThumbObserver = new IntersectionObserver(
+                  (entries, observer) => {
+                    for (const entry of entries) {
+                      if (!entry.isIntersecting) continue;
+                      const img = entry.target;
+                      loadNow(img);
+                      observer.unobserve(img);
+                    }
+                  },
+                  {
+                    root: null,
+                    // Keep preload margin small so Safari does not queue half the page.
+                    rootMargin: "0px 0px 40px 0px",
+                    threshold: 0.01,
+                  }
+                );
+              }
+
+              const observer = window.__galleryThumbObserver;
+              lazyImages.forEach((img) => {
+                if (img.dataset.loaded === "1") return;
+                observer.observe(img);
+              });
+            })();
+            "#,
+        );
+    });
 
     use_effect(move || {
         spawn(async move {
@@ -445,7 +504,12 @@ pub fn Gallery() -> Element {
                                 class: "relative group cursor-pointer overflow-hidden rounded-lg bg-slate-800 hover:ring-2 hover:ring-blue-500 transition-all",
                                 onclick: move |_| selected_image.set(Some(idx)),
                                 img {
-                                    src: "{img.url}",
+                                    src: if idx < 6 { img.thumbnail_url.clone() } else { THUMB_PLACEHOLDER.to_string() },
+                                    loading: if idx < 6 { "eager" } else { "lazy" },
+                                    decoding: "async",
+                                    "data-lazy-thumb": if idx < 6 { "false" } else { "true" },
+                                    "data-thumb-src": if idx < 6 { "".to_string() } else { img.thumbnail_url.clone() },
+                                    "data-loaded": if idx < 6 { "1" } else { "0" },
                                     // call format_display inline to avoid `let` inside rsx!
                                     alt: "{format_display(&img.filename)}",
                                     class: "w-full h-64 object-cover group-hover:scale-105 transition-transform duration-200"
@@ -508,6 +572,7 @@ async fn fetch_images() -> Result<Vec<ImageInfo>, ServerFnError> {
                         let filename_str = filename.to_string_lossy().to_string();
                         images.push(ImageInfo {
                             url: format!("/gallery-assets/{}", filename_str),
+                            thumbnail_url: format!("/gallery-thumbnails/{}", filename_str),
                             filename: filename_str,
                         });
                     }

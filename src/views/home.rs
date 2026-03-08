@@ -1,8 +1,12 @@
 use dioxus::prelude::*;
+#[cfg(target_arch = "wasm32")]
+use std::cell::{Cell, RefCell};
 #[cfg(feature = "server")]
 use std::collections::HashMap;
 #[cfg(feature = "server")]
 use std::net::{IpAddr, SocketAddr};
+#[cfg(target_arch = "wasm32")]
+use std::rc::Rc;
 #[cfg(feature = "server")]
 use std::sync::Arc;
 #[cfg(feature = "server")]
@@ -17,6 +21,85 @@ use web_sys::{MessageEvent, WebSocket};
 const CAMERA_SVG: Asset = asset!("/assets/svg/camera.svg");
 #[cfg(feature = "server")]
 const IMAGE_SAVE_LIMIT_PER_HOUR: usize = 5;
+
+#[cfg(target_arch = "wasm32")]
+struct SpectrogramSocketCallbacks {
+    _on_message: Closure<dyn FnMut(MessageEvent)>,
+    _on_open: Closure<dyn FnMut(web_sys::Event)>,
+    _on_error: Closure<dyn FnMut(web_sys::ErrorEvent)>,
+    _on_close: Closure<dyn FnMut(web_sys::CloseEvent)>,
+}
+
+#[cfg(target_arch = "wasm32")]
+struct SpectrogramRuntime {
+    stop_flag: Rc<Cell<bool>>,
+    timeout_id: Rc<RefCell<Option<i32>>>,
+    render_loop: Rc<RefCell<Option<Closure<dyn FnMut()>>>>,
+    socket_ref: Rc<RefCell<Option<WebSocket>>>,
+    socket_callbacks: Rc<RefCell<Option<SpectrogramSocketCallbacks>>>,
+}
+
+#[cfg(target_arch = "wasm32")]
+fn detach_spectrogram_socket_handlers(socket: &WebSocket) {
+    socket.set_onmessage(None);
+    socket.set_onopen(None);
+    socket.set_onerror(None);
+    socket.set_onclose(None);
+}
+
+#[cfg(target_arch = "wasm32")]
+impl SpectrogramRuntime {
+    fn stop(&self) {
+        self.stop_flag.set(true);
+
+        if let Some(window) = web_sys::window() {
+            if let Some(id) = self.timeout_id.borrow_mut().take() {
+                window.clear_timeout_with_handle(id);
+            }
+        }
+
+        if let Some(socket) = self.socket_ref.borrow_mut().take() {
+            detach_spectrogram_socket_handlers(&socket);
+            let _ = socket.close();
+        }
+
+        self.socket_callbacks.borrow_mut().take();
+        self.render_loop.borrow_mut().take();
+    }
+}
+
+#[cfg(target_arch = "wasm32")]
+impl Drop for SpectrogramRuntime {
+    fn drop(&mut self) {
+        self.stop();
+    }
+}
+
+#[cfg(target_arch = "wasm32")]
+thread_local! {
+    static SPECTROGRAM_RUNTIME: RefCell<Option<SpectrogramRuntime>> = const { RefCell::new(None) };
+}
+
+#[cfg(target_arch = "wasm32")]
+fn set_spectrogram_runtime(runtime: SpectrogramRuntime) {
+    SPECTROGRAM_RUNTIME.with(|slot| {
+        let mut slot = slot.borrow_mut();
+        if let Some(existing) = slot.take() {
+            existing.stop();
+        }
+        *slot = Some(runtime);
+    });
+}
+
+#[cfg(target_arch = "wasm32")]
+fn clear_spectrogram_runtime() {
+    SPECTROGRAM_RUNTIME.with(|slot| {
+        let mut slot = slot.borrow_mut();
+        if let Some(existing) = slot.take() {
+            existing.stop();
+        }
+    });
+}
 
 #[cfg(feature = "server")]
 static IMAGE_SAVE_TRACKER: once_cell::sync::Lazy<Arc<Mutex<HashMap<String, Vec<u64>>>>> =
@@ -222,10 +305,10 @@ async fn get_ir_state() -> Result<bool, ServerFnError> {
 }
 
 #[cfg(target_arch = "wasm32")]
-fn init_webgl_spectrogram(canvas_id: &str, ws_url: &str) -> Result<(), wasm_bindgen::JsValue> {
-    use std::cell::RefCell;
-    use std::rc::Rc;
-    use wasm_bindgen::JsCast;
+fn init_webgl_spectrogram(
+    canvas_id: &str,
+    ws_url: &str,
+) -> Result<SpectrogramRuntime, wasm_bindgen::JsValue> {
     use web_sys::{CanvasRenderingContext2d, HtmlCanvasElement, ImageData};
 
     let document = web_sys::window().unwrap().document().unwrap();
@@ -263,19 +346,24 @@ fn init_webgl_spectrogram(canvas_id: &str, ws_url: &str) -> Result<(), wasm_bind
     let log_freq_map = Rc::new(log_freq_map);
     let frame_buffer = Rc::new(RefCell::new(Vec::<Vec<f64>>::new()));
     let socket_ref = Rc::new(RefCell::new(None::<WebSocket>));
+    let socket_callbacks = Rc::new(RefCell::new(None::<SpectrogramSocketCallbacks>));
+    let stop_flag = Rc::new(Cell::new(false));
+    let timeout_id = Rc::new(RefCell::new(None::<i32>));
     let ws_url = ws_url.to_string();
-    let last_data_time = Rc::new(RefCell::new(js_sys::Date::now()));
 
     let connect_websocket = {
         let frame_buffer = frame_buffer.clone();
         let socket_ref = socket_ref.clone();
-        let last_data_time = last_data_time.clone();
+        let socket_callbacks = socket_callbacks.clone();
+        let stop_flag = stop_flag.clone();
         let ws_url = ws_url.clone();
 
         move || {
-            if socket_ref.borrow().is_some() {
+            if stop_flag.get() || socket_ref.borrow().is_some() {
                 return;
             }
+
+            socket_callbacks.borrow_mut().take();
 
             let socket = match WebSocket::new(&ws_url) {
                 Ok(s) => s,
@@ -288,7 +376,6 @@ fn init_webgl_spectrogram(canvas_id: &str, ws_url: &str) -> Result<(), wasm_bind
             };
 
             let frame_buffer_clone = frame_buffer.clone();
-            let last_data_clone = last_data_time.clone();
 
             let on_message = Closure::wrap(Box::new(move |event: MessageEvent| {
                 if let Some(text) = event.data().as_string() {
@@ -297,7 +384,6 @@ fn init_webgl_spectrogram(canvas_id: &str, ws_url: &str) -> Result<(), wasm_bind
                         if buffer.len() < 10 {
                             buffer.push(fft);
                         }
-                        *last_data_clone.borrow_mut() = js_sys::Date::now();
                     }
                 }
             }) as Box<dyn FnMut(_)>);
@@ -311,8 +397,10 @@ fn init_webgl_spectrogram(canvas_id: &str, ws_url: &str) -> Result<(), wasm_bind
             }) as Box<dyn FnMut(web_sys::ErrorEvent)>);
 
             let socket_ref_close = socket_ref.clone();
+            let socket_for_close = socket.clone();
             let on_close = Closure::wrap(Box::new(move |_: web_sys::CloseEvent| {
                 web_sys::console::warn_1(&"Spectrogram WebSocket closed, will retry".into());
+                detach_spectrogram_socket_handlers(&socket_for_close);
                 *socket_ref_close.borrow_mut() = None;
             }) as Box<dyn FnMut(web_sys::CloseEvent)>);
 
@@ -321,12 +409,13 @@ fn init_webgl_spectrogram(canvas_id: &str, ws_url: &str) -> Result<(), wasm_bind
             socket.set_onerror(Some(on_error.as_ref().unchecked_ref()));
             socket.set_onclose(Some(on_close.as_ref().unchecked_ref()));
 
-            on_message.forget();
-            on_open.forget();
-            on_error.forget();
-            on_close.forget();
-
             *socket_ref.borrow_mut() = Some(socket);
+            *socket_callbacks.borrow_mut() = Some(SpectrogramSocketCallbacks {
+                _on_message: on_message,
+                _on_open: on_open,
+                _on_error: on_error,
+                _on_close: on_close,
+            });
         }
     };
 
@@ -339,16 +428,23 @@ fn init_webgl_spectrogram(canvas_id: &str, ws_url: &str) -> Result<(), wasm_bind
 
     let render_loop = Rc::new(RefCell::new(None::<Closure<dyn FnMut()>>));
     let render_loop_clone = render_loop.clone();
+    let stop_flag_render = stop_flag.clone();
+    let timeout_id_render = timeout_id.clone();
+    let socket_ref_render = socket_ref.clone();
+    let frame_buffer_render = frame_buffer.clone();
 
     *render_loop.borrow_mut() = Some(Closure::wrap(Box::new(move || {
+        if stop_flag_render.get() {
+            return;
+        }
+
         // Check connection and reconnect if needed
-        if socket_ref.borrow().is_none() {
+        if socket_ref_render.borrow().is_none() {
             connect_websocket();
         }
 
         // Check if we have data and pop it in a separate scope
-        let fft_data = frame_buffer.borrow_mut().pop();
-        let has_data = fft_data.is_some();
+        let fft_data = frame_buffer_render.borrow_mut().pop();
 
         let delay = if let Some(fft) = fft_data {
             // Process data at 30 FPS
@@ -388,7 +484,7 @@ fn init_webgl_spectrogram(canvas_id: &str, ws_url: &str) -> Result<(), wasm_bind
         };
 
         let window = web_sys::window().unwrap();
-        let _ = window.set_timeout_with_callback_and_timeout_and_arguments_0(
+        if let Ok(id) = window.set_timeout_with_callback_and_timeout_and_arguments_0(
             render_loop_clone
                 .borrow()
                 .as_ref()
@@ -396,11 +492,13 @@ fn init_webgl_spectrogram(canvas_id: &str, ws_url: &str) -> Result<(), wasm_bind
                 .as_ref()
                 .unchecked_ref(),
             delay,
-        );
+        ) {
+            *timeout_id_render.borrow_mut() = Some(id);
+        }
     }) as Box<dyn FnMut()>));
 
     let window = web_sys::window().unwrap();
-    window.set_timeout_with_callback_and_timeout_and_arguments_0(
+    let id = window.set_timeout_with_callback_and_timeout_and_arguments_0(
         render_loop
             .borrow()
             .as_ref()
@@ -409,11 +507,18 @@ fn init_webgl_spectrogram(canvas_id: &str, ws_url: &str) -> Result<(), wasm_bind
             .unchecked_ref(),
         0,
     )?;
+    *timeout_id.borrow_mut() = Some(id);
 
     ctx.set_fill_style(&"black".into());
     ctx.fill_rect(0.0, 0.0, WIDTH as f64, HEIGHT as f64);
 
-    Ok(())
+    Ok(SpectrogramRuntime {
+        stop_flag,
+        timeout_id,
+        render_loop,
+        socket_ref,
+        socket_callbacks,
+    })
 }
 
 pub fn Home() -> Element {
@@ -471,13 +576,22 @@ pub fn Home() -> Element {
 
         use_effect(move || {
             if !spec_initialized() {
-                if let Err(e) = init_webgl_spectrogram("spectrogram", &ws_url_clone) {
-                    web_sys::console::error_1(
-                        &format!("Failed to init spectrogram: {:?}", e).into(),
-                    );
+                match init_webgl_spectrogram("spectrogram", &ws_url_clone) {
+                    Ok(runtime) => {
+                        set_spectrogram_runtime(runtime);
+                        spec_initialized.set(true);
+                    }
+                    Err(e) => {
+                        web_sys::console::error_1(
+                            &format!("Failed to init spectrogram: {:?}", e).into(),
+                        );
+                    }
                 }
-                spec_initialized.set(true);
             }
+        });
+
+        use_drop(move || {
+            clear_spectrogram_runtime();
         });
     }
 

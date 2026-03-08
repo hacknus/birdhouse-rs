@@ -1,8 +1,138 @@
-use axum::{extract::Multipart, http::StatusCode, response::IntoResponse};
-use base64::engine::general_purpose;
-use base64::Engine;
-use std::path::Path;
+use axum::{
+    extract::{Multipart, Path as AxumPath},
+    http::{header, HeaderMap, StatusCode},
+    response::IntoResponse,
+};
+use image::{codecs::jpeg::JpegEncoder, ImageReader};
+use std::path::{Path, PathBuf};
 use tokio::fs;
+
+const GALLERY_DIR: &str = "./gallery";
+const THUMB_CACHE_DIR: &str = "./gallery-thumbs";
+const THUMB_MAX_SIZE: u32 = 640;
+const THUMB_QUALITY: u8 = 75;
+
+fn sanitize_gallery_filename(filename: &str) -> Option<String> {
+    let safe_filename: String = filename
+        .chars()
+        .filter(|c| c.is_alphanumeric() || *c == '.' || *c == '-' || *c == '_')
+        .collect();
+
+    if safe_filename.is_empty() || safe_filename != filename {
+        return None;
+    }
+
+    Some(safe_filename)
+}
+
+fn is_supported_image(path: &Path) -> bool {
+    let extension = path
+        .extension()
+        .and_then(|s| s.to_str())
+        .unwrap_or("")
+        .to_lowercase();
+    matches!(extension.as_str(), "jpg" | "jpeg" | "png" | "gif" | "webp")
+}
+
+async fn should_regenerate_thumbnail(source_path: &Path, thumb_path: &Path) -> bool {
+    let source_meta = match fs::metadata(source_path).await {
+        Ok(meta) => meta,
+        Err(_) => return true,
+    };
+
+    let thumb_meta = match fs::metadata(thumb_path).await {
+        Ok(meta) => meta,
+        Err(_) => return true,
+    };
+
+    match (source_meta.modified(), thumb_meta.modified()) {
+        (Ok(source_time), Ok(thumb_time)) => source_time > thumb_time,
+        _ => false,
+    }
+}
+
+fn thumbnail_filename(filename: &str) -> String {
+    format!("{}.jpg", filename)
+}
+
+pub async fn serve_gallery_thumbnail(AxumPath(filename): AxumPath<String>) -> impl IntoResponse {
+    let Some(safe_filename) = sanitize_gallery_filename(&filename) else {
+        return (StatusCode::BAD_REQUEST, "invalid filename").into_response();
+    };
+
+    let source_path = PathBuf::from(GALLERY_DIR).join(&safe_filename);
+    if fs::metadata(&source_path).await.is_err() {
+        return (StatusCode::NOT_FOUND, "image not found").into_response();
+    }
+
+    if !is_supported_image(&source_path) {
+        return (StatusCode::BAD_REQUEST, "invalid file type").into_response();
+    }
+
+    if let Err(e) = fs::create_dir_all(THUMB_CACHE_DIR).await {
+        return (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            format!("mkdir failed: {}", e),
+        )
+            .into_response();
+    }
+
+    let thumb_path = PathBuf::from(THUMB_CACHE_DIR).join(thumbnail_filename(&safe_filename));
+
+    if !should_regenerate_thumbnail(&source_path, &thumb_path).await {
+        if let Ok(cached) = fs::read(&thumb_path).await {
+            let mut headers = HeaderMap::new();
+            headers.insert(header::CONTENT_TYPE, "image/jpeg".parse().unwrap());
+            headers.insert(
+                header::CACHE_CONTROL,
+                "public, max-age=604800, immutable".parse().unwrap(),
+            );
+            return (StatusCode::OK, headers, cached).into_response();
+        }
+    }
+
+    let source_path_for_task = source_path.clone();
+    let thumb_path_for_task = thumb_path.clone();
+    let generated = match tokio::task::spawn_blocking(move || -> Result<Vec<u8>, String> {
+        let image = ImageReader::open(&source_path_for_task)
+            .map_err(|e| format!("open failed: {}", e))?
+            .with_guessed_format()
+            .map_err(|e| format!("format guess failed: {}", e))?
+            .decode()
+            .map_err(|e| format!("decode failed: {}", e))?;
+
+        let thumb = image.thumbnail(THUMB_MAX_SIZE, THUMB_MAX_SIZE);
+        let mut bytes = Vec::new();
+        let mut encoder = JpegEncoder::new_with_quality(&mut bytes, THUMB_QUALITY);
+        encoder
+            .encode_image(&thumb)
+            .map_err(|e| format!("encode failed: {}", e))?;
+
+        std::fs::write(&thumb_path_for_task, &bytes)
+            .map_err(|e| format!("cache write failed: {}", e))?;
+        Ok(bytes)
+    })
+    .await
+    {
+        Ok(Ok(bytes)) => bytes,
+        Ok(Err(msg)) => return (StatusCode::INTERNAL_SERVER_ERROR, msg).into_response(),
+        Err(e) => {
+            return (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                format!("thumbnail task failed: {}", e),
+            )
+                .into_response()
+        }
+    };
+
+    let mut headers = HeaderMap::new();
+    headers.insert(header::CONTENT_TYPE, "image/jpeg".parse().unwrap());
+    headers.insert(
+        header::CACHE_CONTROL,
+        "public, max-age=604800, immutable".parse().unwrap(),
+    );
+    (StatusCode::OK, headers, generated).into_response()
+}
 
 pub async fn upload_image_multipart(mut multipart: Multipart) -> impl IntoResponse {
     let mut file_bytes: Option<bytes::Bytes> = None;
@@ -51,28 +181,16 @@ pub async fn upload_image_multipart(mut multipart: Multipart) -> impl IntoRespon
         None => return (StatusCode::BAD_REQUEST, "missing file").into_response(),
     };
 
-    // Sanitize and validate filename (same rules as your existing code)
-    let safe_filename: String = filename
-        .chars()
-        .filter(|c| c.is_alphanumeric() || *c == '.' || *c == '-' || *c == '_')
-        .collect();
+    let safe_filename = match sanitize_gallery_filename(&filename) {
+        Some(name) => name,
+        None => return (StatusCode::BAD_REQUEST, "invalid filename").into_response(),
+    };
 
-    if safe_filename.is_empty() || safe_filename != filename {
-        return (StatusCode::BAD_REQUEST, "invalid filename").into_response();
-    }
-
-    // Validate extension
-    let extension = Path::new(&safe_filename)
-        .extension()
-        .and_then(|s| s.to_str())
-        .unwrap_or("")
-        .to_lowercase();
-    if !matches!(extension.as_str(), "jpg" | "jpeg" | "png" | "gif" | "webp") {
+    if !is_supported_image(Path::new(&safe_filename)) {
         return (StatusCode::BAD_REQUEST, "invalid file type").into_response();
     }
 
-    let upload_dir = "./gallery";
-    if let Err(e) = fs::create_dir_all(upload_dir).await {
+    if let Err(e) = fs::create_dir_all(GALLERY_DIR).await {
         return (
             StatusCode::INTERNAL_SERVER_ERROR,
             format!("mkdir failed: {}", e),
@@ -80,7 +198,7 @@ pub async fn upload_image_multipart(mut multipart: Multipart) -> impl IntoRespon
             .into_response();
     }
 
-    let path = format!("{}/{}", upload_dir, safe_filename);
+    let path = format!("{}/{}", GALLERY_DIR, safe_filename);
     if let Err(e) = fs::write(&path, &bytes).await {
         return (
             StatusCode::INTERNAL_SERVER_ERROR,
@@ -88,6 +206,10 @@ pub async fn upload_image_multipart(mut multipart: Multipart) -> impl IntoRespon
         )
             .into_response();
     }
+
+    // Drop any stale thumbnail cache so replaced files regenerate.
+    let thumb_path = PathBuf::from(THUMB_CACHE_DIR).join(thumbnail_filename(&safe_filename));
+    let _ = fs::remove_file(thumb_path).await;
 
     (StatusCode::OK, format!("uploaded {}", path)).into_response()
 }

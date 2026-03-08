@@ -9,6 +9,14 @@ use wasm_bindgen::{closure::Closure, JsCast};
 use web_sys::{MessageEvent, WebSocket};
 
 #[cfg(target_arch = "wasm32")]
+struct ViewerWsCallbacks {
+    _on_message: Closure<dyn FnMut(MessageEvent)>,
+    _on_open: Closure<dyn FnMut(web_sys::Event)>,
+    _on_close: Closure<dyn FnMut(web_sys::CloseEvent)>,
+    _on_error: Closure<dyn FnMut(web_sys::Event)>,
+}
+
+#[cfg(target_arch = "wasm32")]
 fn parse_bool_from_state_payload(
     payload: &str,
     on_contains: &[&str],
@@ -43,6 +51,8 @@ pub struct TcpState {
     #[cfg(target_arch = "wasm32")]
     pub ws: Signal<Option<WebSocket>>,
     #[cfg(target_arch = "wasm32")]
+    ws_callbacks: Signal<Option<ViewerWsCallbacks>>,
+    #[cfg(target_arch = "wasm32")]
     pub heartbeat: Signal<Option<Interval>>,
     #[cfg(target_arch = "wasm32")]
     pub reconnect: Signal<Option<Interval>>,
@@ -57,6 +67,8 @@ impl TcpState {
             ws_connected: Signal::new(false),
             #[cfg(target_arch = "wasm32")]
             ws: Signal::new(None),
+            #[cfg(target_arch = "wasm32")]
+            ws_callbacks: Signal::new(None),
             #[cfg(target_arch = "wasm32")]
             heartbeat: Signal::new(None),
             #[cfg(target_arch = "wasm32")]
@@ -81,10 +93,17 @@ impl TcpState {
             let ir_filter = self.ir_filter_enabled;
             let ws_connected = self.ws_connected;
             let ws_handle = self.ws;
+            let ws_callbacks = self.ws_callbacks;
 
             let reconnect = Interval::new(3_000, move || {
                 if ws_handle.read().is_none() {
-                    open_viewer_websocket(ir_enabled, ir_filter, ws_connected, ws_handle);
+                    open_viewer_websocket(
+                        ir_enabled,
+                        ir_filter,
+                        ws_connected,
+                        ws_handle,
+                        ws_callbacks,
+                    );
                 }
             });
 
@@ -97,9 +116,18 @@ impl TcpState {
                 self.ir_filter_enabled,
                 self.ws_connected,
                 self.ws,
+                self.ws_callbacks,
             );
         }
     }
+}
+
+#[cfg(target_arch = "wasm32")]
+fn detach_viewer_socket_handlers(socket: &WebSocket) {
+    socket.set_onopen(None);
+    socket.set_onclose(None);
+    socket.set_onerror(None);
+    socket.set_onmessage(None);
 }
 
 #[cfg(target_arch = "wasm32")]
@@ -108,10 +136,13 @@ fn open_viewer_websocket(
     mut ir_filter: Signal<bool>,
     mut ws_connected: Signal<bool>,
     mut ws_handle: Signal<Option<WebSocket>>,
+    mut ws_callbacks: Signal<Option<ViewerWsCallbacks>>,
 ) {
     if ws_handle.read().is_some() {
         return;
     }
+
+    ws_callbacks.set(None);
 
     let window = web_sys::window().expect("browser window");
     let protocol = window
@@ -167,14 +198,19 @@ fn open_viewer_websocket(
         ws_connected.set(true);
     }) as Box<dyn FnMut(web_sys::Event)>);
 
+    let socket_for_close = socket.clone();
     let on_close = Closure::wrap(Box::new(move |_| {
         web_sys::console::warn_1(&"WebSocket closed, reconnecting…".into());
+        detach_viewer_socket_handlers(&socket_for_close);
         ws_connected.set(false);
         ws_handle.set(None);
     }) as Box<dyn FnMut(web_sys::CloseEvent)>);
 
+    let socket_for_error = socket.clone();
     let on_error = Closure::wrap(Box::new(move |_| {
         web_sys::console::error_1(&"WebSocket error, reconnecting…".into());
+        detach_viewer_socket_handlers(&socket_for_error);
+        let _ = socket_for_error.close();
         ws_connected.set(false);
         ws_handle.set(None);
     }) as Box<dyn FnMut(web_sys::Event)>);
@@ -184,10 +220,12 @@ fn open_viewer_websocket(
     socket.set_onerror(Some(on_error.as_ref().unchecked_ref()));
     socket.set_onmessage(Some(on_message.as_ref().unchecked_ref()));
 
-    on_open.forget();
-    on_close.forget();
-    on_error.forget();
-    on_message.forget();
+    ws_callbacks.set(Some(ViewerWsCallbacks {
+        _on_message: on_message,
+        _on_open: on_open,
+        _on_close: on_close,
+        _on_error: on_error,
+    }));
 
     ws_handle.set(Some(socket));
 }

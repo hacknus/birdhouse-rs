@@ -1,6 +1,4 @@
 use dioxus::prelude::*;
-#[cfg(target_arch = "wasm32")]
-use js_sys::eval;
 
 #[cfg(feature = "server")]
 use crate::tcp_client;
@@ -54,29 +52,6 @@ pub fn Newsletter() -> Element {
         });
     };
 
-    #[cfg(target_arch = "wasm32")]
-    use_effect(|| {
-        let _ = eval(
-            r#"
-            (() => {
-              const form = document.getElementById("newsletter-form");
-              const input = document.getElementById("newsletter-email-input");
-              if (!input || !form) return;
-              form.setAttribute("autocomplete", "off");
-              input.setAttribute("data-protonpass-ignore", "true");
-              input.setAttribute("data-lpignore", "true");
-              input.setAttribute("data-1p-ignore", "true");
-              input.setAttribute("autocomplete", "off");
-              input.setAttribute("name", "contact_value");
-              input.setAttribute("readonly", "readonly");
-              input.addEventListener("focus", () => {
-                input.removeAttribute("readonly");
-              }, { once: true });
-            })();
-            "#,
-        );
-    });
-
     rsx! {
         section {
             class: "min-h-screen w-full bg-slate-900 text-white px-4 py-10",
@@ -90,35 +65,19 @@ pub fn Newsletter() -> Element {
                 form {
                     id: "newsletter-form",
                     class: "flex flex-col sm:flex-row gap-3",
-                    autocomplete: "off",
+                    autocomplete: "on",
                     onsubmit: move |evt| {
                         evt.prevent_default();
                         submit_newsletter();
                     },
                     input {
-                        r#type: "text",
-                        name: "username",
-                        autocomplete: "username",
-                        tabindex: "-1",
-                        aria_hidden: "true",
-                        class: "hidden",
-                    }
-                    input {
-                        r#type: "password",
-                        name: "password",
-                        autocomplete: "current-password",
-                        tabindex: "-1",
-                        aria_hidden: "true",
-                        class: "hidden",
-                    }
-                    input {
                         id: "newsletter-email-input",
                         r#type: "email",
                         value: email(),
                         placeholder: "email@domain.com",
-                        name: "contact_value",
+                        name: "email",
                         inputmode: "email",
-                        autocomplete: "off",
+                        autocomplete: "email",
                         autocapitalize: "none",
                         autocorrect: "off",
                         spellcheck: "false",
@@ -142,9 +101,6 @@ pub fn Newsletter() -> Element {
                             }
                         ),
                         disabled: submitting(),
-                        onclick: move |_| {
-                            submit_newsletter();
-                        },
                         if submitting() { "Adding..." } else { "Subscribe" }
                     }
                 }

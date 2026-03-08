@@ -255,7 +255,7 @@ fn is_private_ip(ip: &IpAddr) -> bool {
 #[cfg(feature = "server")]
 #[tokio::main]
 async fn main() {
-    use api::gallery::upload_image_multipart;
+    use api::gallery::{serve_gallery_thumbnail, upload_image_multipart};
     use axum::routing::post;
     use axum::Router;
     use axum::{
@@ -1096,6 +1096,10 @@ async fn main() {
 
     let router = Router::new()
         .route("/api/upload_image", post(upload_image_multipart))
+        .route(
+            "/gallery-thumbnails/{filename}",
+            get(serve_gallery_thumbnail),
+        )
         .route("/api/stream-proxy/{*path}", get(stream_proxy))
         .route("/voegeli", get(|| async { Redirect::temporary("/") }))
         .route("/unsubscribe/{encoded_email}/", get(redirect_unsubscribe))

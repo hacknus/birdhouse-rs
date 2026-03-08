@@ -50,6 +50,7 @@ reqwest = { version = "0.13", features = ["json"] }
 uuid = { version = "1.19", features = ["v4", "js", "serde"] }
 dashmap = "6.1.0"
 num-traits = "0.2"
+image = { version = "0.25.8", default-features = false, features = ["jpeg", "png", "gif", "webp"], optional = true }
 
 # WASM-only dependencies (only compiled for web target)
 [target.'cfg(target_arch = "wasm32")'.dependencies]
@@ -74,4 +75,5 @@ server = [
     "dep:influxdb2-derive",
     "dep:influxdb2-structmap",
     "dep:futures",
+    "dep:image",
 ]
