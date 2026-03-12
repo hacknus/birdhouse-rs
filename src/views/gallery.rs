@@ -62,10 +62,12 @@ fn format_display(filename: &str) -> String {
 fn ImageViewer(
     images: Vec<ImageInfo>,
     current_index: Option<usize>,
+    initial_scroll_y: f64,
     on_close: EventHandler<()>,
     on_next: EventHandler<()>,
     on_prev: EventHandler<()>,
 ) -> Element {
+    #[cfg(target_arch = "wasm32")]
     use dioxus::prelude::spawn;
     #[cfg(target_arch = "wasm32")]
     use std::time::Duration;
@@ -76,8 +78,6 @@ fn ImageViewer(
 
     let current_image = &images[idx];
     let current_display = format_display(&current_image.filename);
-    let mut saved_scroll_y = use_signal(|| 0.0);
-
     // State to track swipe gestures
     let mut touch_start_x = use_signal(|| 0.0);
     let mut touch_current_x = use_signal(|| 0.0);
@@ -88,15 +88,11 @@ fn ImageViewer(
     let mut is_animating = use_signal(|| false);
 
     use_effect(move || {
-        spawn(async move {
-            let scroll_y = save_scroll_position();
-            saved_scroll_y.set(scroll_y);
-            lock_scroll(scroll_y);
-        });
+        lock_scroll(initial_scroll_y);
     });
 
     use_drop(move || {
-        unlock_scroll(saved_scroll_y());
+        unlock_scroll(initial_scroll_y);
     });
 
     // helper indices for prev/next with wrap
@@ -408,6 +404,7 @@ pub fn Gallery() -> Element {
 
     let mut images = use_signal(|| Vec::<ImageInfo>::new());
     let mut selected_image = use_signal(|| None::<usize>);
+    let mut selected_scroll_y = use_signal(|| 0.0f64);
     let mut loading = use_signal(|| true);
     let mut error = use_signal(|| None::<String>);
 
@@ -496,34 +493,38 @@ pub fn Gallery() -> Element {
                     p { class: "text-white text-xl", "No images found" }
                 }
             } else {
-                if selected_image().is_none() {
-                    div { class: "grid grid-cols-2 md:grid-cols-3 lg:grid-cols-4 gap-4",
-                        for (idx, img) in images().iter().enumerate() {
-                            div {
-                                key: "{img.filename}",
-                                class: "relative group cursor-pointer overflow-hidden rounded-lg bg-slate-800 hover:ring-2 hover:ring-blue-500 transition-all",
-                                onclick: move |_| selected_image.set(Some(idx)),
-                                img {
-                                    src: if idx < 6 { img.thumbnail_url.clone() } else { THUMB_PLACEHOLDER.to_string() },
-                                    loading: if idx < 6 { "eager" } else { "lazy" },
-                                    decoding: "async",
-                                    "data-lazy-thumb": if idx < 6 { "false" } else { "true" },
-                                    "data-thumb-src": if idx < 6 { "".to_string() } else { img.thumbnail_url.clone() },
-                                    "data-loaded": if idx < 6 { "1" } else { "0" },
-                                    // call format_display inline to avoid `let` inside rsx!
-                                    alt: "{format_display(&img.filename)}",
-                                    class: "w-full h-64 object-cover group-hover:scale-105 transition-transform duration-200"
-                                }
-                                div { class: "absolute bottom-0 left-0 right-0 bg-black bg-opacity-50 p-2",
-                                    p { class: "text-white text-sm truncate", "{format_display(&img.filename)}" }
-                                }
+                div { class: "grid grid-cols-2 md:grid-cols-3 lg:grid-cols-4 gap-4",
+                    for (idx, img) in images().iter().enumerate() {
+                        div {
+                            key: "{img.filename}",
+                            class: "relative group cursor-pointer overflow-hidden rounded-lg bg-slate-800 hover:ring-2 hover:ring-blue-500 transition-all",
+                            onclick: move |_| {
+                                selected_scroll_y.set(save_scroll_position());
+                                selected_image.set(Some(idx));
+                            },
+                            img {
+                                src: if idx < 6 { img.thumbnail_url.clone() } else { THUMB_PLACEHOLDER.to_string() },
+                                loading: if idx < 6 { "eager" } else { "lazy" },
+                                decoding: "async",
+                                "data-lazy-thumb": if idx < 6 { "false" } else { "true" },
+                                "data-thumb-src": if idx < 6 { "".to_string() } else { img.thumbnail_url.clone() },
+                                "data-loaded": if idx < 6 { "1" } else { "0" },
+                                // call format_display inline to avoid `let` inside rsx!
+                                alt: "{format_display(&img.filename)}",
+                                class: "w-full h-64 object-cover group-hover:scale-105 transition-transform duration-200"
+                            }
+                            div { class: "absolute bottom-0 left-0 right-0 bg-black bg-opacity-50 p-2",
+                                p { class: "text-white text-sm truncate", "{format_display(&img.filename)}" }
                             }
                         }
                     }
-                } else {
+                }
+
+                if selected_image().is_some() {
                     ImageViewer {
                         images: images(),
                         current_index: selected_image(),
+                        initial_scroll_y: selected_scroll_y(),
                         on_close: move |_| selected_image.set(None),
                         on_next: move |_| {
                             if let Some(idx) = selected_image() {
