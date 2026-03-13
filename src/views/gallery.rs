@@ -331,9 +331,8 @@ fn ImageViewer(
                 onclick: move |evt: MouseEvent| evt.stop_propagation(),
                 div {
                     class: "relative",
-                    // strip that will be translated during swipe (contains prev, current, next)
                     button {
-                        class: "absolute left-4 top-1/2 -translate-y-1/2 z-10 bg-white bg-opacity-30 rounded-lg px-3 py-2 h-12 w-auto flex items-center justify-center hover:bg-opacity-50 transition-all",
+                        class: "absolute left-4 top-1/2 -translate-y-1/2 z-20 bg-white bg-opacity-30 rounded-lg px-3 py-2 h-12 w-auto flex items-center justify-center hover:bg-opacity-50 transition-all",
                         onclick: move |evt| {
                             evt.stop_propagation();
                             on_prev.call(());
@@ -346,7 +345,7 @@ fn ImageViewer(
                     }
 
                     button {
-                        class: "absolute right-4 top-1/2 -translate-y-1/2 z-10 bg-white bg-opacity-30 rounded-lg px-3 py-2 h-12 w-auto flex items-center justify-center hover:bg-opacity-50 transition-all",
+                        class: "absolute right-4 top-1/2 -translate-y-1/2 z-20 bg-white bg-opacity-30 rounded-lg px-3 py-2 h-12 w-auto flex items-center justify-center hover:bg-opacity-50 transition-all",
                         onclick: move |evt| {
                             evt.stop_propagation();
                             on_next.call(());
@@ -358,58 +357,60 @@ fn ImageViewer(
                         }
                     }
 
-                    style: "{style_string}",
-                    // prev slide
                     div {
-                        key: "prev-{images[prev_index].filename}",
-                        style: "{slide_style}",
-                        div { style: "{inner_slide_style}",
-                            img {
-                                key: "prev-img-{images[prev_index].filename}",
-                                style: "{img_style}",
-                                src: if prev_loaded {
-                                    images[prev_index].url.clone()
-                                } else {
-                                    images[prev_index].thumbnail_url.clone()
-                                },
-                                alt: "{prev_display}",
-                                class: "rounded-lg",
+                        style: "{style_string}",
+                        // strip that will be translated during swipe (contains prev, current, next)
+                        div {
+                            key: "prev-{images[prev_index].filename}",
+                            style: "{slide_style}",
+                            div { style: "{inner_slide_style}",
+                                img {
+                                    key: "prev-img-{images[prev_index].filename}",
+                                    style: "{img_style}",
+                                    src: if prev_loaded {
+                                        images[prev_index].url.clone()
+                                    } else {
+                                        images[prev_index].thumbnail_url.clone()
+                                    },
+                                    alt: "{prev_display}",
+                                    class: "rounded-lg",
+                                }
                             }
                         }
-                    }
-                    // current slide
-                    div {
-                        key: "current-{current_image.filename}",
-                        style: "{slide_style}",
-                        div { style: "{inner_slide_style}",
-                            img {
-                                key: "current-img-{current_image.filename}",
-                                style: "{img_style}",
-                                src: if current_loaded {
-                                    current_image.url.clone()
-                                } else {
-                                    current_image.thumbnail_url.clone()
-                                },
-                                alt: "{current_display}",
-                                class: "rounded-lg",
+
+                        div {
+                            key: "current-{current_image.filename}",
+                            style: "{slide_style}",
+                            div { style: "{inner_slide_style}",
+                                img {
+                                    key: "current-img-{current_image.filename}",
+                                    style: "{img_style}",
+                                    src: if current_loaded {
+                                        current_image.url.clone()
+                                    } else {
+                                        current_image.thumbnail_url.clone()
+                                    },
+                                    alt: "{current_display}",
+                                    class: "rounded-lg",
+                                }
                             }
                         }
-                    }
-                    // next slide
-                    div {
-                        key: "next-{images[next_index].filename}",
-                        style: "{slide_style}",
-                        div { style: "{inner_slide_style}",
-                            img {
-                                key: "next-img-{images[next_index].filename}",
-                                style: "{img_style}",
-                                src: if next_loaded {
-                                    images[next_index].url.clone()
-                                } else {
-                                    images[next_index].thumbnail_url.clone()
-                                },
-                                alt: "{next_display}",
-                                class: "rounded-lg",
+
+                        div {
+                            key: "next-{images[next_index].filename}",
+                            style: "{slide_style}",
+                            div { style: "{inner_slide_style}",
+                                img {
+                                    key: "next-img-{images[next_index].filename}",
+                                    style: "{img_style}",
+                                    src: if next_loaded {
+                                        images[next_index].url.clone()
+                                    } else {
+                                        images[next_index].thumbnail_url.clone()
+                                    },
+                                    alt: "{next_display}",
+                                    class: "rounded-lg",
+                                }
                             }
                         }
                     }
