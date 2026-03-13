@@ -3,6 +3,7 @@ use dioxus::prelude::*;
 #[cfg(target_arch = "wasm32")]
 use js_sys::eval;
 use serde::{Deserialize, Serialize};
+use std::collections::HashSet;
 
 use crate::views::gallery_client::{lock_scroll, save_scroll_position, unlock_scroll};
 use std::path::Path;
@@ -62,6 +63,7 @@ fn format_display(filename: &str) -> String {
 fn ImageViewer(
     images: Vec<ImageInfo>,
     current_index: Option<usize>,
+    loaded_full_images: Signal<HashSet<String>>,
     initial_scroll_y: f64,
     on_close: EventHandler<()>,
     on_next: EventHandler<()>,
@@ -99,6 +101,9 @@ fn ImageViewer(
     let len = images.len();
     let prev_index = if len > 0 { (idx + len - 1) % len } else { idx };
     let next_index = if len > 0 { (idx + 1) % len } else { idx };
+    let current_loaded = loaded_full_images().contains(&current_image.filename);
+    let prev_loaded = loaded_full_images().contains(&images[prev_index].filename);
+    let next_loaded = loaded_full_images().contains(&images[next_index].filename);
 
     // Capture the starting point of the touch
     let handle_touchstart = move |evt: TouchEvent| {
@@ -320,69 +325,117 @@ fn ImageViewer(
                 }
             }
 
-            button {
-                class: "absolute left-4 top-1/2 -translate-y-1/2 z-10 bg-white bg-opacity-30 rounded-lg px-3 py-2 h-12 w-auto flex items-center justify-center hover:bg-opacity-50 transition-all",
-                onclick: move |evt| {
-                    evt.stop_propagation();
-                    on_prev.call(());
-                },
-                img {
-                    src: ARROW_LEFT,
-                    class: "w-6 h-6",
-                    alt: "Previous"
-                }
-            }
-
-            button {
-                class: "absolute right-4 top-1/2 -translate-y-1/2 z-10 bg-white bg-opacity-30 rounded-lg px-3 py-2 h-12 w-auto flex items-center justify-center hover:bg-opacity-50 transition-all",
-                onclick: move |evt| {
-                    evt.stop_propagation();
-                    on_next.call(());
-                },
-                img {
-                    src: ARROW_RIGHT,
-                    class: "w-6 h-6",
-                    alt: "Next"
-                }
-            }
-
             // viewer container uses available height under navbar
             div {
                 class: "viewer-content w-screen max-h-[90vh] overflow-hidden relative",
                 onclick: move |evt: MouseEvent| evt.stop_propagation(),
-                // strip that will be translated during swipe (contains prev, current, next)
                 div {
+                    class: "relative",
+                    // strip that will be translated during swipe (contains prev, current, next)
+                    button {
+                        class: "absolute left-4 top-1/2 -translate-y-1/2 z-10 bg-white bg-opacity-30 rounded-lg px-3 py-2 h-12 w-auto flex items-center justify-center hover:bg-opacity-50 transition-all",
+                        onclick: move |evt| {
+                            evt.stop_propagation();
+                            on_prev.call(());
+                        },
+                        img {
+                            src: ARROW_LEFT,
+                            class: "w-6 h-6",
+                            alt: "Previous"
+                        }
+                    }
+
+                    button {
+                        class: "absolute right-4 top-1/2 -translate-y-1/2 z-10 bg-white bg-opacity-30 rounded-lg px-3 py-2 h-12 w-auto flex items-center justify-center hover:bg-opacity-50 transition-all",
+                        onclick: move |evt| {
+                            evt.stop_propagation();
+                            on_next.call(());
+                        },
+                        img {
+                            src: ARROW_RIGHT,
+                            class: "w-6 h-6",
+                            alt: "Next"
+                        }
+                    }
+
                     style: "{style_string}",
                     // prev slide
-                    div { style: "{slide_style}",
+                    div {
+                        key: "prev-{images[prev_index].filename}",
+                        style: "{slide_style}",
                         div { style: "{inner_slide_style}",
                             img {
+                                key: "prev-img-{images[prev_index].filename}",
                                 style: "{img_style}",
-                                src: images[prev_index].thumbnail_url.clone(),
+                                src: if prev_loaded {
+                                    images[prev_index].url.clone()
+                                } else {
+                                    images[prev_index].thumbnail_url.clone()
+                                },
                                 alt: "{prev_display}",
                                 class: "rounded-lg",
                             }
                         }
                     }
                     // current slide
-                    div { style: "{slide_style}",
+                    div {
+                        key: "current-{current_image.filename}",
+                        style: "{slide_style}",
                         div { style: "{inner_slide_style}",
                             img {
+                                key: "current-img-{current_image.filename}",
                                 style: "{img_style}",
-                                src: current_image.url.clone(),
+                                src: if current_loaded {
+                                    current_image.url.clone()
+                                } else {
+                                    current_image.thumbnail_url.clone()
+                                },
                                 alt: "{current_display}",
                                 class: "rounded-lg",
                             }
                         }
                     }
                     // next slide
-                    div { style: "{slide_style}",
+                    div {
+                        key: "next-{images[next_index].filename}",
+                        style: "{slide_style}",
                         div { style: "{inner_slide_style}",
                             img {
+                                key: "next-img-{images[next_index].filename}",
                                 style: "{img_style}",
-                                src: images[next_index].thumbnail_url.clone(),
+                                src: if next_loaded {
+                                    images[next_index].url.clone()
+                                } else {
+                                    images[next_index].thumbnail_url.clone()
+                                },
                                 alt: "{next_display}",
                                 class: "rounded-lg",
+                            }
+                        }
+                    }
+                }
+                for preload_image in [
+                    images[prev_index].clone(),
+                    current_image.clone(),
+                    images[next_index].clone(),
+                ]
+                .into_iter()
+                {
+                    if !loaded_full_images().contains(&preload_image.filename) {
+                        img {
+                            key: "preload-{preload_image.filename}",
+                            src: preload_image.url.clone(),
+                            alt: "",
+                            class: "hidden",
+                            aria_hidden: "true",
+                            onload: {
+                                let filename = preload_image.filename.clone();
+                                move |_| {
+                                    let mut next_loaded = loaded_full_images();
+                                    if next_loaded.insert(filename.clone()) {
+                                        loaded_full_images.set(next_loaded);
+                                    }
+                                }
                             }
                         }
                     }
@@ -405,6 +458,7 @@ pub fn Gallery() -> Element {
     let mut images = use_signal(|| Vec::<ImageInfo>::new());
     let mut selected_image = use_signal(|| None::<usize>);
     let mut selected_scroll_y = use_signal(|| 0.0f64);
+    let loaded_full_images = use_signal(HashSet::<String>::new);
     let mut loading = use_signal(|| true);
     let mut error = use_signal(|| None::<String>);
 
@@ -524,6 +578,7 @@ pub fn Gallery() -> Element {
                     ImageViewer {
                         images: images(),
                         current_index: selected_image(),
+                        loaded_full_images,
                         initial_scroll_y: selected_scroll_y(),
                         on_close: move |_| selected_image.set(None),
                         on_next: move |_| {
