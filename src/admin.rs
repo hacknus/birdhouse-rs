@@ -23,6 +23,10 @@ const ADMIN_CREDENTIALS_FILE: &str = "data/admin_credentials.json";
 const ADMIN_SESSION_TTL_SECS: i64 = 12 * 60 * 60;
 #[cfg(feature = "server")]
 const PASSKEY_FLOW_TTL_SECS: i64 = 5 * 60;
+#[cfg(feature = "server")]
+const LOGIN_RATE_LIMIT_WINDOW_SECS: i64 = 60;
+#[cfg(feature = "server")]
+const LOGIN_RATE_LIMIT_MAX_ATTEMPTS: usize = 5;
 
 #[cfg(feature = "server")]
 #[derive(Clone)]
@@ -95,6 +99,8 @@ static PASSKEY_REGISTRATION_FLOWS: Lazy<DashMap<String, PasskeyRegistrationFlow>
 #[cfg(feature = "server")]
 static PASSKEY_AUTH_FLOWS: Lazy<DashMap<String, PasskeyAuthenticationFlow>> =
     Lazy::new(DashMap::new);
+#[cfg(feature = "server")]
+static LOGIN_ATTEMPTS: Lazy<DashMap<String, Vec<i64>>> = Lazy::new(DashMap::new);
 
 #[cfg(feature = "server")]
 static ADMIN_WEBAUTHN: Lazy<Result<Webauthn, String>> = Lazy::new(|| {
@@ -190,7 +196,7 @@ fn default_credentials() -> AdminCredentials {
                 .ok()
                 .filter(|v| !v.trim().is_empty())
         })
-        .unwrap_or_else(|| "admin".to_string());
+        .unwrap_or_else(|| "admin@proton.me".to_string());
     let password = std::env::var("ADMIN_PASSWORD").unwrap_or_else(|_| "admin".to_string());
     let password_salt = Uuid::new_v4().to_string();
 
@@ -362,22 +368,55 @@ fn prune_passkey_flows(now: i64) {
 }
 
 #[cfg(feature = "server")]
+fn rate_limit_key(email: &str) -> String {
+    email.trim().to_ascii_lowercase()
+}
+
+#[cfg(feature = "server")]
+fn check_login_rate_limit(email: &str, now: i64) -> Result<(), String> {
+    let key = rate_limit_key(email);
+    let mut attempts = LOGIN_ATTEMPTS.entry(key).or_default();
+    attempts.retain(|attempt| now - *attempt < LOGIN_RATE_LIMIT_WINDOW_SECS);
+    if attempts.len() >= LOGIN_RATE_LIMIT_MAX_ATTEMPTS {
+        return Err("Too many login attempts. Please wait a minute and try again.".to_string());
+    }
+    Ok(())
+}
+
+#[cfg(feature = "server")]
+fn record_login_attempt(email: &str, now: i64) {
+    let key = rate_limit_key(email);
+    let mut attempts = LOGIN_ATTEMPTS.entry(key).or_default();
+    attempts.retain(|attempt| now - *attempt < LOGIN_RATE_LIMIT_WINDOW_SECS);
+    attempts.push(now);
+}
+
+#[cfg(feature = "server")]
+fn clear_login_attempts(email: &str) {
+    LOGIN_ATTEMPTS.remove(&rate_limit_key(email));
+}
+
+#[cfg(feature = "server")]
 pub fn admin_login_password(email: &str, password: &str) -> Result<String, String> {
     let credentials = load_credentials()?;
     let now = Utc::now().timestamp();
     prune_sessions(now);
     prune_passkey_flows(now);
+    check_login_rate_limit(email, now)?;
 
     if email.trim() != credentials.email {
+        record_login_attempt(email, now);
         return Err("Invalid admin credentials.".to_string());
     }
 
     let password_ok =
         hash_secret(password, &credentials.password_salt) == credentials.password_hash;
     if !password_ok {
+        record_login_attempt(email, now);
         return Err("Invalid admin credentials.".to_string());
     }
 
+    clear_login_attempts(email);
     let token = Uuid::new_v4().to_string();
     ADMIN_SESSIONS.insert(token.clone(), AdminSession { last_seen: now });
     Ok(token)
@@ -529,20 +568,23 @@ pub fn admin_begin_passkey_login(email: &str) -> Result<PasskeyBeginResult, Stri
     let now = Utc::now().timestamp();
     prune_sessions(now);
     prune_passkey_flows(now);
+    check_login_rate_limit(email, now)?;
 
     let credentials = load_credentials()?;
     if email.trim() != credentials.email {
+        record_login_attempt(email, now);
         return Err("Invalid admin credentials.".to_string());
     }
-    let passkey = credentials
-        .passkey
-        .as_ref()
-        .ok_or_else(|| "No passkey configured for this admin account.".to_string())?;
+    let passkey = credentials.passkey.as_ref().ok_or_else(|| {
+        record_login_attempt(email, now);
+        "No passkey configured for this admin account.".to_string()
+    })?;
 
     let (request, state) = admin_webauthn()?
         .start_passkey_authentication(std::slice::from_ref(passkey))
         .map_err(|e| format!("Failed to start passkey login: {}", e))?;
 
+    clear_login_attempts(email);
     let flow_id = Uuid::new_v4().to_string();
     PASSKEY_AUTH_FLOWS.insert(
         flow_id.clone(),

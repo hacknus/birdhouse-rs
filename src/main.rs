@@ -257,7 +257,9 @@ fn is_private_ip(ip: &IpAddr) -> bool {
 #[cfg(feature = "server")]
 #[tokio::main]
 async fn main() {
+    use crate::postgres_store::{PostgresTimeSeriesStore, TimeSeriesValue};
     use api::gallery::{serve_gallery_thumbnail, upload_image_multipart};
+    use axum::extract::DefaultBodyLimit;
     use axum::routing::post;
     use axum::Router;
     use axum::{
@@ -272,7 +274,6 @@ async fn main() {
         response::Redirect,
         routing::get,
     };
-    use crate::postgres_store::{PostgresTimeSeriesStore, TimeSeriesValue};
     use once_cell::sync::Lazy;
     use std::net::SocketAddr;
     use std::sync::atomic::{AtomicUsize, Ordering};
@@ -378,7 +379,7 @@ async fn main() {
             .map(|v| v.trim().trim_end_matches('/').to_string())
             .unwrap_or_default();
         if request_origin.is_empty() {
-            return Ok(());
+            return Err("Missing Origin header.".to_string());
         }
 
         let expected_origin = expected_webauthn_origin();
@@ -390,6 +391,37 @@ async fn main() {
         }
 
         Ok(())
+    }
+
+    fn validate_proxy_path(
+        upstream_base: &str,
+        path: &str,
+        query: Option<&str>,
+    ) -> Result<reqwest::Url, String> {
+        if path.starts_with('/') || path.starts_with('\\') {
+            return Err("Proxy path must be relative.".to_string());
+        }
+        if path.split('/').any(|segment| {
+            segment.is_empty() || segment == "." || segment == ".." || segment.contains('\\')
+        }) {
+            return Err("Invalid proxy path.".to_string());
+        }
+
+        let base = reqwest::Url::parse(upstream_base)
+            .map_err(|e| format!("Invalid upstream proxy base: {}", e))?;
+        let mut target = base
+            .join(path)
+            .map_err(|e| format!("Invalid upstream proxy target: {}", e))?;
+        target.set_query(query);
+
+        if target.scheme() != base.scheme()
+            || target.host_str() != base.host_str()
+            || target.port_or_known_default() != base.port_or_known_default()
+        {
+            return Err("Proxy target escaped configured upstream.".to_string());
+        }
+
+        Ok(target)
     }
 
     async fn admin_password_login(
@@ -440,8 +472,12 @@ async fn main() {
     }
 
     async fn admin_finish_passkey_login(
+        headers: HeaderMap,
         Json(payload): Json<AdminPasskeyFinishLoginRequest>,
     ) -> impl IntoResponse {
+        if let Err(err) = validate_webauthn_origin(&headers) {
+            return (StatusCode::BAD_REQUEST, Json(AdminApiError { error: err })).into_response();
+        }
         match crate::admin::admin_finish_passkey_login(&payload.flow_id, &payload.credential_json) {
             Ok(token) => {
                 (StatusCode::OK, Json(AdminPasskeyLoginResponse { token })).into_response()
@@ -475,8 +511,12 @@ async fn main() {
     }
 
     async fn admin_finish_passkey_registration(
+        headers: HeaderMap,
         Json(payload): Json<AdminPasskeyFinishRegistrationRequest>,
     ) -> impl IntoResponse {
+        if let Err(err) = validate_webauthn_origin(&headers) {
+            return (StatusCode::BAD_REQUEST, Json(AdminApiError { error: err })).into_response();
+        }
         match crate::admin::admin_finish_passkey_registration(
             &payload.token,
             &payload.flow_id,
@@ -523,16 +563,13 @@ async fn main() {
                 .into_response();
         };
 
-        let mut target = format!("{}/{}", upstream_base.trim_end_matches('/'), path);
-        if let Some(q) = uri.query() {
-            if !q.is_empty() {
-                target.push('?');
-                target.push_str(q);
-            }
-        }
+        let target = match validate_proxy_path(&upstream_base, &path, uri.query()) {
+            Ok(target) => target,
+            Err(err) => return (StatusCode::BAD_REQUEST, err).into_response(),
+        };
 
         let client = reqwest::Client::new();
-        let mut req = client.get(&target);
+        let mut req = client.get(target);
         if let Some(range) = headers.get("range") {
             req = req.header("range", range);
         }
@@ -1131,7 +1168,10 @@ async fn main() {
                     Ok(Some(temp)) => {
                         if let Ok(mut lock) = CURRENT_INSIDE_TEMPERATURE.write() {
                             *lock = Some(temp);
-                            println!("Updated CURRENT_INSIDE_TEMPERATURE from PostgreSQL: {}", temp);
+                            println!(
+                                "Updated CURRENT_INSIDE_TEMPERATURE from PostgreSQL: {}",
+                                temp
+                            );
                         } else {
                             had_connection_failure = true;
                             eprintln!(
@@ -1152,7 +1192,10 @@ async fn main() {
                     Ok(Some(temp)) => {
                         if let Ok(mut lock) = CURRENT_OUTSIDE_TEMPERATURE.write() {
                             *lock = Some(temp);
-                            println!("Updated CURRENT_OUTSIDE_TEMPERATURE from PostgreSQL: {}", temp);
+                            println!(
+                                "Updated CURRENT_OUTSIDE_TEMPERATURE from PostgreSQL: {}",
+                                temp
+                            );
                         } else {
                             had_connection_failure = true;
                             eprintln!(
@@ -1280,7 +1323,10 @@ async fn main() {
     println!("Listening on http://{}", addr);
 
     let router = Router::new()
-        .route("/api/upload_image", post(upload_image_multipart))
+        .route(
+            "/api/upload_image",
+            post(upload_image_multipart).layer(DefaultBodyLimit::max(20 * 1024 * 1024)),
+        )
         .route("/api/admin/password-login", post(admin_password_login))
         .route("/api/admin/validate-session", post(admin_validate_session))
         .route(

@@ -13,6 +13,10 @@ pub enum EncryptionError {
     InvalidTimestampLen,
     ReplayAttack,
     UTF8Error,
+    InvalidBase64,
+    SystemTimeError,
+    InvalidCipher,
+    DecryptError,
 }
 
 pub struct Cipher {
@@ -74,11 +78,14 @@ impl Cipher {
     pub fn decrypt_message(&mut self, ciphertext: &str) -> Result<String, EncryptionError> {
         let ciphertext = general_purpose::STANDARD
             .decode(ciphertext)
-            .expect("Failed to decode ciphertext");
+            .map_err(|_| EncryptionError::InvalidBase64)?;
+        if ciphertext.len() < 16 {
+            return Err(EncryptionError::InvalidTimestampLen);
+        }
         let timestamp_iv = (ciphertext[0..8].to_vec(), ciphertext[8..16].to_vec());
         let now = SystemTime::now()
             .duration_since(UNIX_EPOCH)
-            .expect("Time went backwards")
+            .map_err(|_| EncryptionError::SystemTimeError)?
             .as_secs();
         let timestamp_bytes = {
             if timestamp_iv.0.len() != 8 {
@@ -99,10 +106,10 @@ impl Cipher {
         }
         self.nonce_set.insert(timestamp_iv.clone());
         let cipher = Aes256Cbc::new_from_slices(&self.key, &ciphertext[..16])
-            .expect("Failed to create AES cipher");
+            .map_err(|_| EncryptionError::InvalidCipher)?;
         let decrypted_message = cipher
             .decrypt_vec(&ciphertext[16..])
-            .expect("Failed to decrypt message");
+            .map_err(|_| EncryptionError::DecryptError)?;
         String::from_utf8(decrypted_message).map_err(|_e| EncryptionError::UTF8Error)
     }
 }
@@ -110,6 +117,7 @@ impl Cipher {
 #[cfg(test)]
 mod tests {
     use crate::{Cipher, EncryptionError};
+    use base64::{engine::general_purpose, Engine as _};
 
     #[test]
     fn test_encryption() {
@@ -130,6 +138,27 @@ mod tests {
         assert_eq!(
             decrypted_message.unwrap_err(),
             EncryptionError::ExpiredTimestamp
+        );
+    }
+
+    #[test]
+    fn test_decrypt_rejects_invalid_base64() {
+        let mut cipher = Cipher::new("e10adc3949ba59abbe56e057f20f883e", 30);
+        let decrypted_message = cipher.decrypt_message("not-base64!!");
+        assert_eq!(
+            decrypted_message.unwrap_err(),
+            EncryptionError::InvalidBase64
+        );
+    }
+
+    #[test]
+    fn test_decrypt_rejects_short_ciphertext() {
+        let mut cipher = Cipher::new("e10adc3949ba59abbe56e057f20f883e", 30);
+        let ciphertext = general_purpose::STANDARD.encode([0u8; 15]);
+        let decrypted_message = cipher.decrypt_message(&ciphertext);
+        assert_eq!(
+            decrypted_message.unwrap_err(),
+            EncryptionError::InvalidTimestampLen
         );
     }
 }

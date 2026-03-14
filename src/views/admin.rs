@@ -935,8 +935,49 @@ pub fn Admin() -> Element {
                         if let Some(msg) = login_feedback() {
                             p { class: "text-sm text-slate-200", "{msg}" }
                         }
-                        div {
+                        form {
                             class: "space-y-3",
+                            onsubmit: move |evt| {
+                                evt.prevent_default();
+                                if login_busy() || passkey_login_busy() {
+                                    return;
+                                }
+
+                                let email = login_email().trim().to_string();
+                                let password = login_password().to_string();
+                                if email.is_empty() || password.is_empty() {
+                                    let msg = "Please provide email and password.".to_string();
+                                    status.set(Some(msg.clone()));
+                                    login_feedback.set(Some(msg));
+                                    return;
+                                }
+
+                                login_busy.set(true);
+                                let start_msg = "Signing in with password...".to_string();
+                                status.set(None);
+                                login_feedback.set(Some(start_msg));
+                                spawn(async move {
+                                    match admin_password_login_http(email, password).await {
+                                        Ok(token) => {
+                                            #[cfg(target_arch = "wasm32")]
+                                            write_admin_token_to_storage(&token);
+                                            admin_token.set(Some(token));
+                                            is_authenticated.set(true);
+                                            login_password.set(String::new());
+                                            profile_refresh += 1;
+                                            gallery_refresh += 1;
+                                            status.set(Some("Admin login successful.".to_string()));
+                                            login_feedback.set(None);
+                                        }
+                                        Err(err) => {
+                                            let msg = format!("Login failed: {}", err);
+                                            status.set(Some(msg.clone()));
+                                            login_feedback.set(Some(msg));
+                                        }
+                                    }
+                                    login_busy.set(false);
+                                });
+                            },
                             input {
                                 r#type: "email",
                                 placeholder: "Email",
@@ -950,53 +991,9 @@ pub fn Admin() -> Element {
                                 value: login_password(),
                                 class: "w-full rounded-md bg-white text-black px-3 py-2",
                                 oninput: move |evt| login_password.set(evt.value()),
-                                onkeydown: move |evt: KeyboardEvent| {
-                                    if evt.key() != Key::Enter {
-                                        return;
-                                    }
-                                    evt.prevent_default();
-                                    if login_busy() || passkey_login_busy() {
-                                        return;
-                                    }
-
-                                    let email = login_email().trim().to_string();
-                                    let password = login_password().to_string();
-                                    if email.is_empty() || password.is_empty() {
-                                        let msg = "Please provide email and password.".to_string();
-                                        status.set(Some(msg.clone()));
-                                        login_feedback.set(Some(msg));
-                                        return;
-                                    }
-
-                                    login_busy.set(true);
-                                    let start_msg = "Signing in with password...".to_string();
-                                    status.set(None);
-                                    login_feedback.set(Some(start_msg));
-                                    spawn(async move {
-                                        match admin_password_login_http(email, password).await {
-                                            Ok(token) => {
-                                                #[cfg(target_arch = "wasm32")]
-                                                write_admin_token_to_storage(&token);
-                                                admin_token.set(Some(token));
-                                                is_authenticated.set(true);
-                                                login_password.set(String::new());
-                                                profile_refresh += 1;
-                                                gallery_refresh += 1;
-                                                status.set(Some("Admin login successful.".to_string()));
-                                                login_feedback.set(None);
-                                            }
-                                            Err(err) => {
-                                                let msg = format!("Login failed: {}", err);
-                                                status.set(Some(msg.clone()));
-                                                login_feedback.set(Some(msg));
-                                            }
-                                        }
-                                        login_busy.set(false);
-                                    });
-                                }
                             }
                             button {
-                                r#type: "button",
+                                r#type: "submit",
                                 class: format!(
                                     "rounded-md px-4 py-2 font-medium {}",
                                     if login_busy() {
@@ -1005,46 +1002,6 @@ pub fn Admin() -> Element {
                                         "bg-emerald-500 hover:bg-emerald-600 text-white"
                                     }
                                 ),
-                                onclick: move |_| {
-                                    if login_busy() || passkey_login_busy() {
-                                        return;
-                                    }
-
-                                    let email = login_email().trim().to_string();
-                                    let password = login_password().to_string();
-                                    if email.is_empty() || password.is_empty() {
-                                        let msg = "Please provide email and password.".to_string();
-                                        status.set(Some(msg.clone()));
-                                        login_feedback.set(Some(msg));
-                                        return;
-                                    }
-
-                                    login_busy.set(true);
-                                    let start_msg = "Signing in with password...".to_string();
-                                    status.set(None);
-                                    login_feedback.set(Some(start_msg));
-                                    spawn(async move {
-                                        match admin_password_login_http(email, password).await {
-                                            Ok(token) => {
-                                                #[cfg(target_arch = "wasm32")]
-                                                write_admin_token_to_storage(&token);
-                                                admin_token.set(Some(token));
-                                                is_authenticated.set(true);
-                                                login_password.set(String::new());
-                                                profile_refresh += 1;
-                                                gallery_refresh += 1;
-                                                status.set(Some("Admin login successful.".to_string()));
-                                                login_feedback.set(None);
-                                            }
-                                            Err(err) => {
-                                                let msg = format!("Login failed: {}", err);
-                                                status.set(Some(msg.clone()));
-                                                login_feedback.set(Some(msg));
-                                            }
-                                        }
-                                        login_busy.set(false);
-                                    });
-                                },
                                 if login_busy() { "Signing in..." } else { "Sign in with Password" }
                             }
                         }

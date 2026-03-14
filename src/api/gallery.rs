@@ -11,6 +11,7 @@ const GALLERY_DIR: &str = "./gallery";
 const THUMB_CACHE_DIR: &str = "./gallery-thumbs";
 const THUMB_MAX_SIZE: u32 = 640;
 const THUMB_QUALITY: u8 = 75;
+const MAX_UPLOAD_BYTES: usize = 20 * 1024 * 1024;
 
 fn sanitize_gallery_filename(filename: &str) -> Option<String> {
     let safe_filename: String = filename
@@ -189,6 +190,9 @@ pub async fn upload_image_multipart(mut multipart: Multipart) -> impl IntoRespon
         Some(b) => b,
         None => return (StatusCode::BAD_REQUEST, "missing file").into_response(),
     };
+    if bytes.len() > MAX_UPLOAD_BYTES {
+        return (StatusCode::PAYLOAD_TOO_LARGE, "file too large (max 20 MB)").into_response();
+    }
 
     let safe_filename = match sanitize_gallery_filename(&filename) {
         Some(name) => name,

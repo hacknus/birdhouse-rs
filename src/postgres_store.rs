@@ -150,7 +150,8 @@ impl PostgresTimeSeriesStore {
         let client = self.ensure_connection().await?;
 
         for (field, value) in data {
-            if field.ends_with("_unit") || field.ends_with("_location") || field.ends_with("_type") {
+            if field.ends_with("_unit") || field.ends_with("_location") || field.ends_with("_type")
+            {
                 continue;
             }
             if value.is_null() {
@@ -428,7 +429,10 @@ fn json_value_to_string(value: &Value) -> Option<String> {
 }
 
 fn parse_duration(duration: &str) -> Result<ChronoDuration, String> {
-    let normalized: String = duration.chars().filter(|c| !c.is_ascii_whitespace()).collect();
+    let normalized: String = duration
+        .chars()
+        .filter(|c| !c.is_ascii_whitespace())
+        .collect();
     if normalized.len() < 2 {
         return Err(format!(
             "Unsupported duration format: {:?}. Use e.g. 10s, 1m, 2h, 7d.",
