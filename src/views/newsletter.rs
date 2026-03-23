@@ -27,7 +27,7 @@ async fn add_newsletter_subscriber(email: String) -> Result<String, ServerFnErro
 
 pub fn Newsletter() -> Element {
     let mut email = use_signal(String::new);
-    let mut status = use_signal(|| Option::<String>::None);
+    let mut status = use_signal(|| Option::<Result<String, String>>::None);
     let mut submitting = use_signal(|| false);
     let mut submit_newsletter = move || {
         if submitting() {
@@ -36,18 +36,18 @@ pub fn Newsletter() -> Element {
 
         let value = email().trim().to_string();
         if value.is_empty() {
-            status.set(Some("Enter an email address first.".to_string()));
+            status.set(Some(Err("Enter an email address first.".to_string())));
             return;
         }
 
         submitting.set(true);
         status.set(None);
         spawn(async move {
-            let message = match add_newsletter_subscriber(value).await {
-                Ok(link) => format!("Subscribed. Personal unsubscribe link: {}", link),
-                Err(err) => format!("Subscribe failed: {}", err),
+            let result = match add_newsletter_subscriber(value).await {
+                Ok(link) => Ok(link),
+                Err(err) => Err(format!("Subscribe failed: {}", err)),
             };
-            status.set(Some(message));
+            status.set(Some(result));
             submitting.set(false);
         });
     };
@@ -83,15 +83,9 @@ pub fn Newsletter() -> Element {
                         spellcheck: "false",
                         class: "w-full rounded-md bg-white text-black px-3 py-2 pr-12",
                         oninput: move |evt| email.set(evt.value()),
-                        onkeydown: move |evt: KeyboardEvent| {
-                            if evt.key().to_string().as_str() == "Enter" {
-                                evt.prevent_default();
-                                submit_newsletter();
-                            }
-                        },
                     }
                     button {
-                        r#type: "submit",
+                        r#type: "button",
                         class: format!(
                             "rounded-md px-4 py-2 font-medium {}",
                             if submitting() {
@@ -101,11 +95,26 @@ pub fn Newsletter() -> Element {
                             }
                         ),
                         disabled: submitting(),
+                        onclick: move |_| submit_newsletter(),
                         if submitting() { "Adding..." } else { "Subscribe" }
                     }
                 }
                 if let Some(message) = status() {
-                    p { class: "text-sm text-slate-200 break-all", "{message}" }
+                    match message {
+                        Ok(link) => rsx! {
+                            p { class: "text-sm text-slate-200", "Subscribed." }
+                            a {
+                                class: "text-sm text-emerald-300 underline break-all",
+                                href: "{link}",
+                                target: "_blank",
+                                rel: "noopener noreferrer",
+                                "{link}"
+                            }
+                        },
+                        Err(error) => rsx! {
+                            p { class: "text-sm text-slate-200 break-all", "{error}" }
+                        },
+                    }
                 }
             }
         }
