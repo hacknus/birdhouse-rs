@@ -260,7 +260,7 @@ use crate::tcp_state;
 #[cfg(feature = "server")]
 use crate::CURRENT_LUMINOSITY;
 
-const IR_LUX_THRESHOLD: f64 = 300.0;
+const IR_LUX_THRESHOLD: f64 = 1500.0;
 
 #[server]
 async fn toggle_ir_led(enabled: bool) -> Result<bool, ServerFnError> {
