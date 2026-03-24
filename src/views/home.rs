@@ -257,9 +257,32 @@ pub struct StreamConfig {
 #[cfg(feature = "server")]
 use crate::tcp_client;
 use crate::tcp_state;
+#[cfg(feature = "server")]
+use crate::CURRENT_LUMINOSITY;
+
+const IR_LUX_THRESHOLD: f64 = 300.0;
 
 #[server]
 async fn toggle_ir_led(enabled: bool) -> Result<bool, ServerFnError> {
+    if enabled {
+        let current_lux = {
+            let lock = CURRENT_LUMINOSITY
+                .read()
+                .map_err(|_| ServerFnError::new("Luminosity lock poisoned"))?;
+            *lock
+        };
+
+        match current_lux {
+            Some(lux) if lux < IR_LUX_THRESHOLD => {}
+            Some(lux) => {
+                return Err(ServerFnError::new(format!(
+                    "IR LED can only be enabled below {IR_LUX_THRESHOLD:.0} lux. Current luminosity: {lux:.0} lux."
+                )));
+            }
+            None => {}
+        }
+    }
+
     let cmd = if enabled {
         "[CMD] IR ON"
     } else {
@@ -302,6 +325,22 @@ async fn get_ir_state() -> Result<bool, ServerFnError> {
         "Unexpected IR state response from TCP: {}",
         response
     )))
+}
+
+#[server]
+async fn get_current_luminosity() -> Result<Option<f64>, ServerFnError> {
+    #[cfg(feature = "server")]
+    {
+        let lock = CURRENT_LUMINOSITY
+            .read()
+            .map_err(|_| ServerFnError::new("Luminosity lock poisoned"))?;
+        Ok(*lock)
+    }
+
+    #[cfg(not(feature = "server"))]
+    {
+        Err(ServerFnError::new("Not running on server"))
+    }
 }
 
 #[cfg(target_arch = "wasm32")]
@@ -532,12 +571,31 @@ pub fn Home() -> Element {
     let mut ir_enabled = tcp_state.ir_enabled;
     let mut saving = use_signal(|| false);
     let mut ir_request_id = use_signal(|| 0u64);
+    let mut ir_feedback = use_signal(|| None::<String>);
+    let mut lux_refresh = use_signal(|| 0u64);
+    let luminosity = use_resource(move || {
+        let _ = lux_refresh();
+        async move { get_current_luminosity().await.ok().flatten() }
+    });
 
     // Load initial states in background without blocking render
     use_resource(move || async move {
         if let Ok(state) = get_ir_state().await {
             ir_enabled.set(state);
         }
+    });
+
+    use_effect(move || {
+        let _handle = spawn(async move {
+            #[cfg(target_arch = "wasm32")]
+            gloo_timers::future::sleep(std::time::Duration::from_secs(10)).await;
+
+            loop {
+                lux_refresh += 1;
+                #[cfg(target_arch = "wasm32")]
+                gloo_timers::future::sleep(std::time::Duration::from_secs(10)).await;
+            }
+        });
     });
 
     let config_value = config.read();
@@ -555,14 +613,25 @@ pub fn Home() -> Element {
         .as_ref()
         .map(|s| s.is_limited)
         .unwrap_or(false);
-    let save_count_text = save_status_current
-        .as_ref()
-        .map(|s| format!("{}/{} last hour", s.count_last_hour, s.limit_per_hour))
-        .unwrap_or_else(|| "-/- last hour".to_string());
     let save_tooltip = if is_save_limited {
         "too many pictures taken in the last hour"
     } else {
         "save image"
+    };
+    let current_lux = luminosity.read().as_ref().and_then(|lux| *lux);
+    let can_enable_ir = current_lux
+        .map(|lux| lux < IR_LUX_THRESHOLD)
+        .unwrap_or(true);
+    let ir_toggle_disabled = !ir_enabled() && !can_enable_ir;
+    let ir_label = "Light".to_string();
+    let ir_tooltip = if ir_toggle_disabled {
+        current_lux
+            .map(|lux| {
+                format!("IR LED can only be enabled at night. Current illuminance: {lux:.0} lux")
+            })
+            .unwrap_or_else(|| "toggle IR LED".to_string())
+    } else {
+        "toggle IR LED".to_string()
     };
 
     let stream_url = cfg.stream_url.clone();
@@ -605,27 +674,37 @@ pub fn Home() -> Element {
                     class: "flex items-center gap-2",
                     label {
                         class: "text-white font-small whitespace-nowrap",
-                        "IR LED"
+                        "{ir_label}"
                     }
                     button {
                         class: format!(
                             "relative inline-flex h-6 w-12 items-center rounded-full transition-colors {}",
-                            if ir_enabled() { "bg-blue-500" } else { "bg-gray-600" }
+                            if ir_toggle_disabled {
+                                "bg-gray-700 opacity-60 cursor-not-allowed"
+                            } else if ir_enabled() {
+                                "bg-blue-500"
+                            } else {
+                                "bg-gray-600"
+                            }
                         ),
+                        disabled: ir_toggle_disabled,
+                        title: ir_tooltip,
                         onclick: move |_| {
+                            if ir_toggle_disabled {
+                                return;
+                            }
                             let previous_state = ir_enabled();
                             let new_state = !previous_state;
                             let request_id = ir_request_id() + 1;
                             ir_request_id.set(request_id);
                             ir_enabled.set(new_state);
+                            ir_feedback.set(None);
 
                             let mut ir_request_id_timeout = ir_request_id;
                             let mut ir_enabled_timeout = ir_enabled;
                             spawn(async move {
                                 #[cfg(target_arch = "wasm32")]
                                 gloo_timers::future::sleep(std::time::Duration::from_secs(5)).await;
-                                #[cfg(not(target_arch = "wasm32"))]
-                                tokio::time::sleep(std::time::Duration::from_secs(5)).await;
 
                                 if ir_request_id_timeout() == request_id {
                                     ir_enabled_timeout.set(previous_state);
@@ -645,12 +724,15 @@ pub fn Home() -> Element {
                                         if ir_request_id_ack() == request_id {
                                             ir_enabled_ack.set(state);
                                             ir_request_id_ack.set(0);
+                                            lux_refresh += 1;
                                         }
                                     }
-                                    Err(_) => {
+                                    Err(err) => {
                                         if ir_request_id_ack() == request_id {
                                             ir_enabled_ack.set(previous_state);
                                             ir_request_id_ack.set(0);
+                                            ir_feedback.set(Some(err.to_string()));
+                                            lux_refresh += 1;
                                         }
                                     }
                                 }
@@ -663,6 +745,9 @@ pub fn Home() -> Element {
                             )
                         }
                     }
+                }
+                if let Some(msg) = ir_feedback() {
+                    p { class: "text-xs text-amber-300 whitespace-nowrap", "{msg}" }
                 }
                 div {
                     class: "flex items-center gap-4",
@@ -697,13 +782,13 @@ pub fn Home() -> Element {
 
                             spawn(async move {
                                 match save_image_to_gallery().await {
-                                    Ok(msg) => {
+                                    Ok(_msg) => {
                                         #[cfg(target_arch = "wasm32")]
-                                        web_sys::console::log_1(&msg.into());
+                                        web_sys::console::log_1(&_msg.into());
                                     }
-                                    Err(e) => {
+                                    Err(_e) => {
                                         #[cfg(target_arch = "wasm32")]
-                                        web_sys::console::error_1(&format!("Error: {}", e).into());
+                                        web_sys::console::error_1(&format!("Error: {}", _e).into());
                                     }
                                 }
 

@@ -49,6 +49,9 @@ pub static CURRENT_INSIDE_TEMPERATURE: Lazy<RwLock<Option<f64>>> = Lazy::new(|| 
 pub static CURRENT_OUTSIDE_TEMPERATURE: Lazy<RwLock<Option<f64>>> = Lazy::new(|| RwLock::new(None));
 
 #[cfg(feature = "server")]
+pub static CURRENT_LUMINOSITY: Lazy<RwLock<Option<f64>>> = Lazy::new(|| RwLock::new(None));
+
+#[cfg(feature = "server")]
 static USER_LOCATIONS: Lazy<DashMap<Uuid, UserLocation>> = Lazy::new(DashMap::new);
 
 #[cfg(feature = "server")]
@@ -694,7 +697,7 @@ async fn main() {
     }
 
     #[cfg(feature = "server")]
-    async fn fetch_current_temperature(
+    async fn fetch_current_f64(
         store: &PostgresTimeSeriesStore,
         bucket: &str,
         field: &str,
@@ -1164,7 +1167,7 @@ async fn main() {
             loop {
                 let mut had_connection_failure = false;
 
-                match fetch_current_temperature(&store, &bucket, "inside_temperature").await {
+                match fetch_current_f64(&store, &bucket, "inside_temperature").await {
                     Ok(Some(temp)) => {
                         if let Ok(mut lock) = CURRENT_INSIDE_TEMPERATURE.write() {
                             *lock = Some(temp);
@@ -1188,7 +1191,7 @@ async fn main() {
                     }
                 }
 
-                match fetch_current_temperature(&store, &bucket, "outside_temperature").await {
+                match fetch_current_f64(&store, &bucket, "outside_temperature").await {
                     Ok(Some(temp)) => {
                         if let Ok(mut lock) = CURRENT_OUTSIDE_TEMPERATURE.write() {
                             *lock = Some(temp);
@@ -1205,6 +1208,25 @@ async fn main() {
                     }
                     Ok(None) => {
                         eprintln!("Failed to read outside_temperature from PostgreSQL");
+                    }
+                    Err(e) => {
+                        had_connection_failure = true;
+                        eprintln!("{e}");
+                    }
+                }
+
+                match fetch_current_f64(&store, &bucket, "luminosity").await {
+                    Ok(Some(lux)) => {
+                        if let Ok(mut lock) = CURRENT_LUMINOSITY.write() {
+                            *lock = Some(lux);
+                            println!("Updated CURRENT_LUMINOSITY from PostgreSQL: {}", lux);
+                        } else {
+                            had_connection_failure = true;
+                            eprintln!("Failed to update luminosity: lock poisoned. Retrying soon.");
+                        }
+                    }
+                    Ok(None) => {
+                        eprintln!("Failed to read luminosity from PostgreSQL");
                     }
                     Err(e) => {
                         had_connection_failure = true;

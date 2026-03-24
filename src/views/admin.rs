@@ -5,6 +5,8 @@ use gloo_net::http::Request;
 use js_sys::eval;
 use serde::{Deserialize, Serialize};
 
+const IR_LUX_THRESHOLD: f64 = 300.0;
+
 #[cfg(target_arch = "wasm32")]
 use wasm_bindgen::JsCast;
 #[cfg(target_arch = "wasm32")]
@@ -21,6 +23,12 @@ struct AdminGalleryImage {
     filename: String,
     url: String,
     thumbnail_url: String,
+}
+
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+struct AdminDeviceStatus {
+    ir_enabled: bool,
+    luminosity_lux: Option<f64>,
 }
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
@@ -797,6 +805,109 @@ async fn admin_upload_gallery_image_server(
     }
 }
 
+#[server]
+async fn admin_get_device_status_server(token: String) -> Result<AdminDeviceStatus, ServerFnError> {
+    #[cfg(feature = "server")]
+    {
+        if !crate::admin::admin_validate_session(&token) {
+            return Err(ServerFnError::new("Unauthorized"));
+        }
+
+        let response = crate::tcp_client::send_command("[CMD] GET IR STATE")
+            .await
+            .map_err(ServerFnError::new)?;
+        let payload = response.to_uppercase();
+
+        let mut ir_enabled = None;
+        for raw_line in payload.lines() {
+            let line = raw_line.trim();
+            if line.is_empty() {
+                continue;
+            }
+
+            if line.contains("IR STATE IS ON") {
+                ir_enabled = Some(true);
+                break;
+            }
+
+            if line.contains("IR STATE IS OFF") {
+                ir_enabled = Some(false);
+                break;
+            }
+        }
+
+        let ir_enabled = ir_enabled.ok_or_else(|| {
+            ServerFnError::new(format!(
+                "Unexpected IR state response from TCP: {}",
+                response
+            ))
+        })?;
+
+        let luminosity_lux = {
+            let lock = crate::CURRENT_LUMINOSITY
+                .read()
+                .map_err(|_| ServerFnError::new("Luminosity lock poisoned"))?;
+            *lock
+        };
+
+        Ok(AdminDeviceStatus {
+            ir_enabled,
+            luminosity_lux,
+        })
+    }
+
+    #[cfg(not(feature = "server"))]
+    {
+        Err(ServerFnError::new("Not running on server"))
+    }
+}
+
+#[server]
+async fn admin_toggle_ir_led_server(token: String, enabled: bool) -> Result<bool, ServerFnError> {
+    #[cfg(feature = "server")]
+    {
+        if !crate::admin::admin_validate_session(&token) {
+            return Err(ServerFnError::new("Unauthorized"));
+        }
+
+        let cmd = if enabled {
+            "[CMD] IR ON"
+        } else {
+            "[CMD] IR OFF"
+        };
+        crate::tcp_client::send_command(cmd)
+            .await
+            .map(|_| enabled)
+            .map_err(ServerFnError::new)
+    }
+
+    #[cfg(not(feature = "server"))]
+    {
+        Err(ServerFnError::new("Not running on server"))
+    }
+}
+
+#[server]
+async fn admin_save_image_server(token: String) -> Result<String, ServerFnError> {
+    #[cfg(feature = "server")]
+    {
+        if !crate::admin::admin_validate_session(&token) {
+            return Err(ServerFnError::new("Unauthorized"));
+        }
+
+        crate::tcp_client::send_command("[CMD] save image")
+            .await
+            .map_err(|e| ServerFnError::new(format!("Failed to save image: {}", e)))?;
+
+        Ok("Image saved successfully.".to_string())
+    }
+
+    #[cfg(not(feature = "server"))]
+    {
+        Err(ServerFnError::new("Not running on server"))
+    }
+}
+
 #[component]
 pub fn Admin() -> Element {
     #[cfg(target_arch = "wasm32")]
@@ -814,11 +925,15 @@ pub fn Admin() -> Element {
 
     let mut profile_refresh = use_signal(|| 0u64);
     let mut gallery_refresh = use_signal(|| 0u64);
+    let mut device_refresh = use_signal(|| 0u64);
 
     let mut settings_email = use_signal(String::new);
     let mut settings_new_password = use_signal(String::new);
     let mut settings_busy = use_signal(|| false);
     let mut passkey_registration_busy = use_signal(|| false);
+    let mut admin_ir_enabled = use_signal(|| false);
+    let mut admin_ir_busy = use_signal(|| false);
+    let mut admin_save_busy = use_signal(|| false);
 
     let mut upload_filename = use_signal(|| None::<String>);
     let mut upload_bytes = use_signal(|| None::<Vec<u8>>);
@@ -851,6 +966,21 @@ pub fn Admin() -> Element {
         }
     });
 
+    let device_resource = use_resource(move || {
+        let _ = device_refresh();
+        let token = admin_token();
+        async move {
+            if let Some(token) = token {
+                admin_get_device_status_server(token)
+                    .await
+                    .map(Some)
+                    .map_err(|e| e.to_string())
+            } else {
+                Ok(None)
+            }
+        }
+    });
+
     #[cfg(target_arch = "wasm32")]
     use_effect(move || {
         if bootstrapped() {
@@ -866,6 +996,7 @@ pub fn Admin() -> Element {
                         is_authenticated.set(true);
                         profile_refresh += 1;
                         gallery_refresh += 1;
+                        device_refresh += 1;
                         is_valid = true;
                     }
                     _ => clear_admin_token_from_storage(),
@@ -889,6 +1020,18 @@ pub fn Admin() -> Element {
             if settings_email() != profile.email {
                 settings_email.set(profile.email);
             }
+        }
+    });
+
+    let device_snapshot = device_resource
+        .read()
+        .as_ref()
+        .and_then(|result| result.as_ref().ok())
+        .and_then(|value| value.clone());
+    let device_snapshot_for_effect = device_snapshot.clone();
+    use_effect(move || {
+        if let Some(device_status) = device_snapshot_for_effect.clone() {
+            admin_ir_enabled.set(device_status.ir_enabled);
         }
     });
 
@@ -966,6 +1109,7 @@ pub fn Admin() -> Element {
                                             login_password.set(String::new());
                                             profile_refresh += 1;
                                             gallery_refresh += 1;
+                                            device_refresh += 1;
                                             status.set(Some("Admin login successful.".to_string()));
                                             login_feedback.set(None);
                                         }
@@ -1052,6 +1196,7 @@ pub fn Admin() -> Element {
                                                 is_authenticated.set(true);
                                                 profile_refresh += 1;
                                                 gallery_refresh += 1;
+                                                device_refresh += 1;
                                                 status.set(Some("Passkey login successful.".to_string()));
                                                 login_feedback.set(None);
                                             }
@@ -1203,6 +1348,134 @@ pub fn Admin() -> Element {
                             }
                         }
 
+                        div {
+                            class: "rounded-xl border border-slate-700 bg-slate-800 p-6 space-y-4",
+                            h2 { class: "text-xl font-medium", "Device Controls" }
+                            if let Some(Ok(Some(device_status))) = device_resource.read().as_ref() {
+                                {
+                                    let lux_text = device_status
+                                        .luminosity_lux
+                                        .map(|lux| format!("{lux:.0} lux"))
+                                        .unwrap_or_else(|| "unavailable".to_string());
+                                    rsx! {
+                                        p {
+                                            class: "text-slate-300 text-sm",
+                                            "Current luminosity: {lux_text}. Public IR control is limited below {IR_LUX_THRESHOLD:.0} lux, but these admin controls always remain available."
+                                        }
+                                    }
+                                }
+                            } else if let Some(Err(err)) = device_resource.read().as_ref() {
+                                p { class: "text-sm text-red-300 break-all", "Failed to load device status: {err}" }
+                            } else {
+                                p { class: "text-slate-300 text-sm", "Loading device status..." }
+                            }
+                            div { class: "flex flex-wrap items-center gap-4",
+                                div { class: "flex items-center gap-2",
+                                    label {
+                                        class: "text-white font-small whitespace-nowrap",
+                                        "Light"
+                                    }
+                                    button {
+                                        r#type: "button",
+                                        class: format!(
+                                            "relative inline-flex h-6 w-12 items-center rounded-full transition-colors {}",
+                                            if admin_ir_busy() {
+                                                "bg-slate-500 opacity-70"
+                                            } else if admin_ir_enabled() {
+                                                "bg-blue-500"
+                                            } else {
+                                                "bg-gray-600"
+                                            }
+                                        ),
+                                        disabled: admin_ir_busy(),
+                                        title: if admin_ir_busy() { "Updating IR LED..." } else { "toggle IR LED" },
+                                        onclick: move |_| {
+                                            if admin_ir_busy() {
+                                                return;
+                                            }
+                                            let Some(token) = admin_token() else {
+                                                handle_unauthorized();
+                                                return;
+                                            };
+
+                                            admin_ir_busy.set(true);
+                                            status.set(None);
+                                            let next_state = !admin_ir_enabled();
+                                            spawn(async move {
+                                                match admin_toggle_ir_led_server(token, next_state).await {
+                                                    Ok(state) => {
+                                                        admin_ir_enabled.set(state);
+                                                        device_refresh += 1;
+                                                        status.set(Some(format!(
+                                                            "IR LED turned {}.",
+                                                            if state { "on" } else { "off" }
+                                                        )));
+                                                    }
+                                                    Err(err) => {
+                                                        let text = err.to_string();
+                                                        if text.contains("Unauthorized") {
+                                                            handle_unauthorized();
+                                                        } else {
+                                                            status.set(Some(format!("IR LED toggle failed: {}", text)));
+                                                        }
+                                                    }
+                                                }
+                                                admin_ir_busy.set(false);
+                                            });
+                                        },
+                                        span {
+                                            class: format!(
+                                                "inline-block h-4 w-4 transform rounded-full bg-white transition-transform {}",
+                                                if admin_ir_enabled() { "translate-x-7" } else { "translate-x-1" }
+                                            )
+                                        }
+                                    }
+                                }
+
+                                button {
+                                    r#type: "button",
+                                    class: format!(
+                                        "rounded-md px-4 py-2 font-medium {}",
+                                        if admin_save_busy() {
+                                            "bg-slate-500 text-white"
+                                        } else {
+                                            "bg-emerald-500 hover:bg-emerald-600 text-white"
+                                        }
+                                    ),
+                                    disabled: admin_save_busy(),
+                                    onclick: move |_| {
+                                        if admin_save_busy() {
+                                            return;
+                                        }
+                                        let Some(token) = admin_token() else {
+                                            handle_unauthorized();
+                                            return;
+                                        };
+
+                                        admin_save_busy.set(true);
+                                        status.set(None);
+                                        spawn(async move {
+                                            match admin_save_image_server(token).await {
+                                                Ok(msg) => status.set(Some(msg)),
+                                                Err(err) => {
+                                                    let text = err.to_string();
+                                                    if text.contains("Unauthorized") {
+                                                        handle_unauthorized();
+                                                    } else {
+                                                        status.set(Some(format!("Save image failed: {}", text)));
+                                                    }
+                                                }
+                                            }
+                                            admin_save_busy.set(false);
+                                        });
+                                    },
+                                    if admin_save_busy() { "Saving image..." } else { "Save Image" }
+                                }
+                            }
+                        }
+                    }
+
+                    div { class: "grid grid-cols-1 xl:grid-cols-1 gap-6",
                         div {
                             class: "rounded-xl border border-slate-700 bg-slate-800 p-6 space-y-4",
                             h2 { class: "text-xl font-medium", "Add Picture to Gallery" }
