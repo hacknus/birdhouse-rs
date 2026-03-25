@@ -933,6 +933,7 @@ pub fn Admin() -> Element {
     let mut passkey_registration_busy = use_signal(|| false);
     let mut admin_ir_enabled = use_signal(|| false);
     let mut admin_ir_busy = use_signal(|| false);
+    let mut admin_ir_request_id = use_signal(|| 0u64);
     let mut admin_save_busy = use_signal(|| false);
 
     let mut upload_filename = use_signal(|| None::<String>);
@@ -1063,10 +1064,6 @@ pub fn Admin() -> Element {
                 class: "mx-auto w-full max-w-6xl space-y-6",
                 h1 { class: "text-3xl font-semibold", "Admin" }
                 p { class: "text-slate-300", "Manage admin credentials and gallery content." }
-
-                if let Some(msg) = status() {
-                    p { class: "text-sm text-slate-200 break-all", "{msg}" }
-                }
 
                 if auth_loading() {
                     div { class: "rounded-xl border border-slate-700 bg-slate-800 p-6", "Checking admin session..." }
@@ -1379,9 +1376,7 @@ pub fn Admin() -> Element {
                                         r#type: "button",
                                         class: format!(
                                             "relative inline-flex h-6 w-12 items-center rounded-full transition-colors {}",
-                                            if admin_ir_busy() {
-                                                "bg-slate-500 opacity-70"
-                                            } else if admin_ir_enabled() {
+                                            if admin_ir_enabled() {
                                                 "bg-blue-500"
                                             } else {
                                                 "bg-gray-600"
@@ -1400,27 +1395,57 @@ pub fn Admin() -> Element {
 
                                             admin_ir_busy.set(true);
                                             status.set(None);
+                                            let previous_state = admin_ir_enabled();
                                             let next_state = !admin_ir_enabled();
+                                            let request_id = admin_ir_request_id() + 1;
+                                            admin_ir_request_id.set(request_id);
+                                            admin_ir_enabled.set(next_state);
+
+                                            let mut admin_ir_request_id_timeout = admin_ir_request_id;
+                                            let mut admin_ir_enabled_timeout = admin_ir_enabled;
+                                            let mut admin_ir_busy_timeout = admin_ir_busy;
                                             spawn(async move {
+                                                #[cfg(target_arch = "wasm32")]
+                                                gloo_timers::future::sleep(std::time::Duration::from_secs(5)).await;
+
+                                                if admin_ir_request_id_timeout() == request_id {
+                                                    admin_ir_enabled_timeout.set(previous_state);
+                                                    admin_ir_request_id_timeout.set(0);
+                                                    admin_ir_busy_timeout.set(false);
+                                                }
+                                            });
+
+                                            let mut admin_ir_request_id_ack = admin_ir_request_id;
+                                            let mut admin_ir_enabled_ack = admin_ir_enabled;
+                                            let mut admin_ir_busy_ack = admin_ir_busy;
+                                            spawn(async move {
+                                                if admin_ir_request_id_ack() != request_id {
+                                                    return;
+                                                }
+
                                                 match admin_toggle_ir_led_server(token, next_state).await {
                                                     Ok(state) => {
-                                                        admin_ir_enabled.set(state);
-                                                        device_refresh += 1;
-                                                        status.set(Some(format!(
-                                                            "IR LED turned {}.",
-                                                            if state { "on" } else { "off" }
-                                                        )));
+                                                        if admin_ir_request_id_ack() == request_id {
+                                                            admin_ir_enabled_ack.set(state);
+                                                            admin_ir_request_id_ack.set(0);
+                                                            admin_ir_busy_ack.set(false);
+                                                            device_refresh += 1;
+                                                        }
                                                     }
                                                     Err(err) => {
-                                                        let text = err.to_string();
-                                                        if text.contains("Unauthorized") {
-                                                            handle_unauthorized();
-                                                        } else {
-                                                            status.set(Some(format!("IR LED toggle failed: {}", text)));
+                                                        if admin_ir_request_id_ack() == request_id {
+                                                            admin_ir_enabled_ack.set(previous_state);
+                                                            admin_ir_request_id_ack.set(0);
+                                                            admin_ir_busy_ack.set(false);
+                                                            let text = err.to_string();
+                                                            if text.contains("Unauthorized") {
+                                                                handle_unauthorized();
+                                                            } else {
+                                                                status.set(Some(format!("IR LED toggle failed: {}", text)));
+                                                            }
                                                         }
                                                     }
                                                 }
-                                                admin_ir_busy.set(false);
                                             });
                                         },
                                         span {
@@ -1456,7 +1481,7 @@ pub fn Admin() -> Element {
                                         status.set(None);
                                         spawn(async move {
                                             match admin_save_image_server(token).await {
-                                                Ok(msg) => status.set(Some(msg)),
+                                                Ok(_msg) => {}
                                                 Err(err) => {
                                                     let text = err.to_string();
                                                     if text.contains("Unauthorized") {

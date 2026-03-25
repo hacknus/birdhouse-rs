@@ -264,22 +264,18 @@ const IR_LUX_THRESHOLD: f64 = 1500.0;
 
 #[server]
 async fn toggle_ir_led(enabled: bool) -> Result<bool, ServerFnError> {
-    if enabled {
-        let current_lux = {
-            let lock = CURRENT_LUMINOSITY
-                .read()
-                .map_err(|_| ServerFnError::new("Luminosity lock poisoned"))?;
-            *lock
-        };
+    let current_lux = {
+        let lock = CURRENT_LUMINOSITY
+            .read()
+            .map_err(|_| ServerFnError::new("Luminosity lock poisoned"))?;
+        *lock
+    };
 
-        match current_lux {
-            Some(lux) if lux < IR_LUX_THRESHOLD => {}
-            Some(lux) => {
-                return Err(ServerFnError::new(format!(
-                    "IR LED can only be enabled below {IR_LUX_THRESHOLD:.0} lux. Current luminosity: {lux:.0} lux."
-                )));
-            }
-            None => {}
+    if let Some(lux) = current_lux {
+        if lux >= IR_LUX_THRESHOLD {
+            return Err(ServerFnError::new(format!(
+                "IR LED can only be toggled below {IR_LUX_THRESHOLD:.0} lux. Current luminosity: {lux:.0} lux."
+            )));
         }
     }
 
@@ -619,15 +615,15 @@ pub fn Home() -> Element {
         "save image"
     };
     let current_lux = luminosity.read().as_ref().and_then(|lux| *lux);
-    let can_enable_ir = current_lux
+    let can_toggle_ir = current_lux
         .map(|lux| lux < IR_LUX_THRESHOLD)
         .unwrap_or(true);
-    let ir_toggle_disabled = !ir_enabled() && !can_enable_ir;
+    let ir_toggle_disabled = !can_toggle_ir;
     let ir_label = "Light".to_string();
     let ir_tooltip = if ir_toggle_disabled {
         current_lux
             .map(|lux| {
-                format!("IR LED can only be enabled at night. Current illuminance: {lux:.0} lux")
+                format!("IR LED can only be toggled at night. Current illuminance: {lux:.0} lux")
             })
             .unwrap_or_else(|| "toggle IR LED".to_string())
     } else {
