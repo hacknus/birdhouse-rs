@@ -30,6 +30,9 @@ pub use makingof::MakingOf;
 mod how_it_works;
 pub use how_it_works::HowItWorks;
 
+mod birds;
+pub use birds::Birds;
+
 mod newsletter;
 pub use newsletter::Newsletter;
 

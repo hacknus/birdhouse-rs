@@ -12,7 +12,8 @@ use std::net::IpAddr;
 #[cfg(feature = "server")]
 use uuid::Uuid;
 use views::{
-    Admin, ForNerds, Gallery, Home, HowItWorks, MakingOf, Navbar, Newsletter, Unsubscribe, VoguGuru,
+    Admin, Birds, ForNerds, Gallery, Home, HowItWorks, MakingOf, Navbar, Newsletter, Unsubscribe,
+    VoguGuru,
 };
 
 mod admin;
@@ -138,6 +139,9 @@ enum Route {
 
         #[route("/how-it-works")]
         HowItWorks {},
+
+        #[route("/birds")]
+        Birds {},
 
         #[route("/vogu.guru")]
         VoguGuru {},

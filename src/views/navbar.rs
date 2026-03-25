@@ -17,6 +17,7 @@ pub fn Navbar() -> Element {
         Route::Gallery {} => "gallery",
         Route::MakingOf {} => "making",
         Route::HowItWorks {} => "how",
+        Route::Birds {} => "birds",
         Route::VoguGuru {} => "vogu",
         Route::Newsletter {} => "newsletter",
         Route::Unsubscribe { .. } => "newsletter",
@@ -36,8 +37,9 @@ pub fn Navbar() -> Element {
                 class: "nav-links",
                 Link { to: Route::Home {}, "Home" }
                 Link { to: Route::Gallery {}, "Gallery" }
-                Link { to: Route::MakingOf {}, "Making of" }
+                // Link { to: Route::MakingOf {}, "Making of" }
                 Link { to: Route::HowItWorks {}, "How It Works" }
+                Link { to: Route::Birds {}, "Birds" }
                 Link { to: Route::Newsletter {}, "Newsletter" }
                 Link { to: Route::VoguGuru {}, "vogu.guru" }
 
@@ -60,8 +62,9 @@ pub fn Navbar() -> Element {
                         let target = match value.as_str() {
                             "home" => Some(Route::Home {}),
                             "gallery" => Some(Route::Gallery {}),
-                            "making" => Some(Route::MakingOf {}),
+                            // "making" => Some(Route::MakingOf {}),
                             "how" => Some(Route::HowItWorks {}),
+                            "birds" => Some(Route::Birds {}),
                             "newsletter" => Some(Route::Newsletter {}),
                             "vogu" => Some(Route::VoguGuru {}),
                             "nerds" => Some(Route::ForNerds {}),
@@ -76,8 +79,9 @@ pub fn Navbar() -> Element {
 
                     option { value: "home", "Home" }
                     option { value: "gallery", "Gallery" }
-                    option { value: "making", "Making of" }
+                    // option { value: "making", "Making of" }
                     option { value: "how", "How It Works" }
+                    option { value: "birds", "Birds" }
                     option { value: "newsletter", "Newsletter" }
                     option { value: "vogu", "vogu.guru" }
 
