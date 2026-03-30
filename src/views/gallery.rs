@@ -15,10 +15,11 @@ const THUMB_PLACEHOLDER: &str =
     "data:image/gif;base64,R0lGODlhAQABAIAAAAAAAP///ywAAAAAAQABAAACAUwAOw==";
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
-struct ImageInfo {
+struct GalleryItem {
     filename: String,
     url: String,
     thumbnail_url: String,
+    motion_url: Option<String>,
 }
 
 // parse filename -> display string (tries to decode YYYYMMDD[ _- ]HHMMSS formats)
@@ -61,7 +62,7 @@ fn format_display(filename: &str) -> String {
 
 #[component]
 fn ImageViewer(
-    images: Vec<ImageInfo>,
+    images: Vec<GalleryItem>,
     current_index: Option<usize>,
     loaded_full_images: Signal<HashSet<String>>,
     initial_scroll_y: f64,
@@ -80,9 +81,11 @@ fn ImageViewer(
 
     let current_image = &images[idx];
     let current_display = format_display(&current_image.filename);
+    let has_live_motion = current_image.motion_url.is_some();
     // State to track swipe gestures
     let mut touch_start_x = use_signal(|| 0.0);
     let mut touch_current_x = use_signal(|| 0.0);
+    let mut motion_active = use_signal(|| false);
 
     // Visual offset (px) while dragging / animating
     let mut swipe_offset = use_signal(|| 0.0);
@@ -95,6 +98,11 @@ fn ImageViewer(
 
     use_drop(move || {
         unlock_scroll(initial_scroll_y);
+    });
+
+    use_effect(move || {
+        let _ = idx;
+        motion_active.set(false);
     });
 
     // helper indices for prev/next with wrap
@@ -269,6 +277,10 @@ fn ImageViewer(
         "width: calc(100vw - {}px); max-height: calc(100vh - 52px - 120px); object-fit: contain; border-radius: 8px;",
         gap_px
     );
+    let video_style = format!(
+        "position: absolute; inset: 0; width: calc(100vw - {}px); max-height: calc(100vh - 52px - 120px); object-fit: contain; border-radius: 8px;",
+        gap_px
+    );
 
     let prev_display = format_display(&images[prev_index].filename);
     let next_display = format_display(&images[next_index].filename);
@@ -322,6 +334,36 @@ fn ImageViewer(
                     src: DOWNLOAD_SVG,
                     class: "w-6 h-6 invert",
                     alt: "Download"
+                }
+            }
+
+            if has_live_motion {
+                button {
+                    class: "absolute left-20 text-white text-sm tracking-[0.25em] uppercase z-60 bg-black bg-opacity-40 rounded-lg px-3 py-2 border border-white border-opacity-30",
+                    style: "top: 68px;",
+                    onmousedown: move |evt| {
+                        evt.stop_propagation();
+                        motion_active.set(true);
+                    },
+                    onmouseup: move |evt| {
+                        evt.stop_propagation();
+                        motion_active.set(false);
+                    },
+                    onmouseleave: move |_| motion_active.set(false),
+                    ontouchstart: move |evt| {
+                        evt.stop_propagation();
+                        motion_active.set(true);
+                    },
+                    ontouchend: move |evt| {
+                        evt.stop_propagation();
+                        motion_active.set(false);
+                    },
+                    onclick: move |evt| evt.stop_propagation(),
+                    if motion_active() {
+                        "LIVE"
+                    } else {
+                        "Hold LIVE"
+                    }
                 }
             }
 
@@ -381,7 +423,15 @@ fn ImageViewer(
                         div {
                             key: "current-{current_image.filename}",
                             style: "{slide_style}",
-                            div { style: "{inner_slide_style}",
+                            div {
+                                style: "{inner_slide_style}",
+                                onmousedown: move |_| {
+                                    if has_live_motion {
+                                        motion_active.set(true);
+                                    }
+                                },
+                                onmouseup: move |_| motion_active.set(false),
+                                onmouseleave: move |_| motion_active.set(false),
                                 img {
                                     key: "current-img-{current_image.filename}",
                                     style: "{img_style}",
@@ -392,6 +442,24 @@ fn ImageViewer(
                                     },
                                     alt: "{current_display}",
                                     class: "rounded-lg",
+                                }
+                                if motion_active() {
+                                    if let Some(motion_url) = current_image.motion_url.clone() {
+                                        video {
+                                            key: "live-video-{current_image.filename}",
+                                            style: "{video_style}",
+                                            autoplay: true,
+                                            muted: true,
+                                            playsinline: true,
+                                            preload: "metadata",
+                                            poster: current_image.url.clone(),
+                                            onended: move |_| motion_active.set(false),
+                                            onclick: move |evt| evt.stop_propagation(),
+                                            source {
+                                                src: motion_url,
+                                            }
+                                        }
+                                    }
                                 }
                             }
                         }
@@ -456,7 +524,7 @@ fn ImageViewer(
 pub fn Gallery() -> Element {
     use dioxus::prelude::spawn;
 
-    let mut images = use_signal(|| Vec::<ImageInfo>::new());
+    let mut images = use_signal(|| Vec::<GalleryItem>::new());
     let mut selected_image = use_signal(|| None::<usize>);
     let mut selected_scroll_y = use_signal(|| 0.0f64);
     let loaded_full_images = use_signal(HashSet::<String>::new);
@@ -568,6 +636,12 @@ pub fn Gallery() -> Element {
                                 alt: "{format_display(&img.filename)}",
                                 class: "w-full h-64 object-cover group-hover:scale-105 transition-transform duration-200"
                             }
+                            if img.motion_url.is_some() {
+                                div {
+                                    class: "absolute left-3 top-3 rounded-full border border-white border-opacity-30 bg-black bg-opacity-55 px-3 py-1 text-xs font-medium uppercase tracking-[0.25em] text-white",
+                                    "LIVE"
+                                }
+                            }
                             div { class: "absolute bottom-0 left-0 right-0 bg-black bg-opacity-50 p-2",
                                 p { class: "text-white text-sm truncate", "{format_display(&img.filename)}" }
                             }
@@ -602,10 +676,17 @@ pub fn Gallery() -> Element {
 }
 
 #[server]
-async fn fetch_images() -> Result<Vec<ImageInfo>, ServerFnError> {
+async fn fetch_images() -> Result<Vec<GalleryItem>, ServerFnError> {
     #[cfg(feature = "server")]
     {
         use std::fs;
+        use std::collections::HashMap;
+
+        #[derive(Default)]
+        struct GalleryBundleParts {
+            still: Option<String>,
+            motion: Option<String>,
+        }
 
         let local_cache = "./gallery";
 
@@ -615,27 +696,53 @@ async fn fetch_images() -> Result<Vec<ImageInfo>, ServerFnError> {
         let entries = fs::read_dir(local_cache)
             .map_err(|e| ServerFnError::new(format!("Failed to read directory: {}", e)))?;
 
-        let mut images = Vec::new();
+        let mut bundles: HashMap<String, GalleryBundleParts> = HashMap::new();
 
         for entry in entries {
             let entry =
                 entry.map_err(|e| ServerFnError::new(format!("Failed to read entry: {}", e)))?;
             let path = entry.path();
+            let metadata = entry
+                .metadata()
+                .map_err(|e| ServerFnError::new(format!("Failed to stat entry: {}", e)))?;
+            if metadata.len() == 0 {
+                continue;
+            }
 
-            if let Some(ext) = path.extension() {
-                let ext = ext.to_string_lossy().to_lowercase();
-                if matches!(ext.as_str(), "jpg" | "jpeg" | "png" | "gif" | "webp") {
-                    if let Some(filename) = path.file_name() {
-                        let filename_str = filename.to_string_lossy().to_string();
-                        images.push(ImageInfo {
-                            url: format!("/gallery-assets/{}", filename_str),
-                            thumbnail_url: format!("/gallery-thumbnails/{}", filename_str),
-                            filename: filename_str,
-                        });
-                    }
+            let Some(stem) = path.file_stem().and_then(|value| value.to_str()) else {
+                continue;
+            };
+            let Some(filename) = path.file_name().and_then(|value| value.to_str()) else {
+                continue;
+            };
+            let Some(ext) = path.extension().and_then(|value| value.to_str()) else {
+                continue;
+            };
+
+            let entry = bundles.entry(stem.to_string()).or_default();
+            match ext.to_lowercase().as_str() {
+                "jpg" | "jpeg" | "png" | "gif" | "webp" | "heic" => {
+                    entry.still = Some(filename.to_string());
                 }
+                "mov" | "mp4" => {
+                    entry.motion = Some(filename.to_string());
+                }
+                _ => {}
             }
         }
+
+        let mut images = bundles
+            .into_values()
+            .filter_map(|bundle| {
+                let still = bundle.still?;
+                Some(GalleryItem {
+                    url: format!("/gallery-assets/{}", still),
+                    thumbnail_url: format!("/gallery-thumbnails/{}", still),
+                    filename: still,
+                    motion_url: bundle.motion.map(|motion| format!("/gallery-assets/{}", motion)),
+                })
+            })
+            .collect::<Vec<_>>();
 
         images.sort_by(|a, b| b.filename.cmp(&a.filename));
 

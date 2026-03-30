@@ -13,6 +13,12 @@ const THUMB_MAX_SIZE: u32 = 640;
 const THUMB_QUALITY: u8 = 75;
 const MAX_UPLOAD_BYTES: usize = 20 * 1024 * 1024;
 
+enum UploadAssetKind {
+    StandardImage,
+    LivePhotoStill { bundle_id: String },
+    LivePhotoMotion { bundle_id: String },
+}
+
 fn sanitize_gallery_filename(filename: &str) -> Option<String> {
     let safe_filename: String = filename
         .chars()
@@ -32,7 +38,96 @@ fn is_supported_image(path: &Path) -> bool {
         .and_then(|s| s.to_str())
         .unwrap_or("")
         .to_lowercase();
+    matches!(
+        extension.as_str(),
+        "jpg" | "jpeg" | "png" | "gif" | "webp" | "heic"
+    )
+}
+
+fn is_thumbnail_source(path: &Path) -> bool {
+    let extension = path
+        .extension()
+        .and_then(|s| s.to_str())
+        .unwrap_or("")
+        .to_lowercase();
     matches!(extension.as_str(), "jpg" | "jpeg" | "png" | "gif" | "webp")
+}
+
+fn is_supported_motion(path: &Path) -> bool {
+    let extension = path
+        .extension()
+        .and_then(|s| s.to_str())
+        .unwrap_or("")
+        .to_lowercase();
+    matches!(extension.as_str(), "mov" | "mp4")
+}
+
+fn content_type_for_path(path: &Path) -> &'static str {
+    match path
+        .extension()
+        .and_then(|s| s.to_str())
+        .unwrap_or("")
+        .to_lowercase()
+        .as_str()
+    {
+        "jpg" | "jpeg" => "image/jpeg",
+        "png" => "image/png",
+        "gif" => "image/gif",
+        "webp" => "image/webp",
+        "heic" => "image/heic",
+        "mov" => "video/quicktime",
+        "mp4" => "video/mp4",
+        _ => "application/octet-stream",
+    }
+}
+
+fn sanitize_bundle_id(bundle_id: &str) -> Option<String> {
+    let safe_bundle_id: String = bundle_id
+        .chars()
+        .filter(|c| c.is_alphanumeric() || *c == '.' || *c == '-' || *c == '_')
+        .collect();
+
+    if safe_bundle_id.is_empty() || safe_bundle_id != bundle_id {
+        return None;
+    }
+
+    Some(safe_bundle_id)
+}
+
+fn parse_upload_asset_kind(
+    filename: &str,
+    asset_kind: Option<&str>,
+    bundle_id: Option<&str>,
+) -> Result<UploadAssetKind, &'static str> {
+    match asset_kind {
+        None => Ok(UploadAssetKind::StandardImage),
+        Some("live_photo_still") => {
+            let bundle_id = bundle_id
+                .and_then(sanitize_bundle_id)
+                .ok_or("invalid bundle_id")?;
+            if !is_supported_image(Path::new(filename)) {
+                return Err("invalid live photo still type");
+            }
+            Ok(UploadAssetKind::LivePhotoStill { bundle_id })
+        }
+        Some("live_photo_motion") => {
+            let bundle_id = bundle_id
+                .and_then(sanitize_bundle_id)
+                .ok_or("invalid bundle_id")?;
+            if !is_supported_motion(Path::new(filename)) {
+                return Err("invalid live photo motion type");
+            }
+            Ok(UploadAssetKind::LivePhotoMotion { bundle_id })
+        }
+        Some(_) => Err("invalid asset_kind"),
+    }
+}
+
+fn extension_for_filename(filename: &str) -> Option<String> {
+    Path::new(filename)
+        .extension()
+        .and_then(|s| s.to_str())
+        .map(|s| s.to_lowercase())
 }
 
 async fn should_regenerate_thumbnail(source_path: &Path, thumb_path: &Path) -> bool {
@@ -72,6 +167,24 @@ pub async fn serve_gallery_thumbnail(AxumPath(filename): AxumPath<String>) -> im
 
     if !is_supported_image(&source_path) {
         return (StatusCode::BAD_REQUEST, "invalid file type").into_response();
+    }
+
+    if !is_thumbnail_source(&source_path) {
+        let original = match fs::read(&source_path).await {
+            Ok(bytes) => bytes,
+            Err(_) => return (StatusCode::NOT_FOUND, "image not found").into_response(),
+        };
+
+        let mut headers = HeaderMap::new();
+        headers.insert(
+            header::CONTENT_TYPE,
+            content_type_for_path(&source_path).parse().unwrap(),
+        );
+        headers.insert(
+            header::CACHE_CONTROL,
+            "public, max-age=604800, immutable".parse().unwrap(),
+        );
+        return (StatusCode::OK, headers, original).into_response();
     }
 
     if let Err(e) = fs::create_dir_all(THUMB_CACHE_DIR).await {
@@ -148,6 +261,8 @@ pub async fn upload_image_multipart(mut multipart: Multipart) -> impl IntoRespon
     let mut file_bytes: Option<bytes::Bytes> = None;
     let mut filename: Option<String> = None;
     let mut auth_token: Option<String> = None;
+    let mut bundle_id: Option<String> = None;
+    let mut asset_kind: Option<String> = None;
 
     while let Some(field) = multipart.next_field().await.unwrap_or(None) {
         match field.name().map(|s| s.to_string()) {
@@ -164,6 +279,16 @@ pub async fn upload_image_multipart(mut multipart: Multipart) -> impl IntoRespon
             Some(n) if n == "auth_token" => {
                 if let Ok(t) = field.text().await {
                     auth_token = Some(t);
+                }
+            }
+            Some(n) if n == "bundle_id" => {
+                if let Ok(t) = field.text().await {
+                    bundle_id = Some(t);
+                }
+            }
+            Some(n) if n == "asset_kind" => {
+                if let Ok(t) = field.text().await {
+                    asset_kind = Some(t);
                 }
             }
             _ => {}
@@ -199,7 +324,16 @@ pub async fn upload_image_multipart(mut multipart: Multipart) -> impl IntoRespon
         None => return (StatusCode::BAD_REQUEST, "invalid filename").into_response(),
     };
 
-    if !is_supported_image(Path::new(&safe_filename)) {
+    let asset_kind = match parse_upload_asset_kind(
+        &safe_filename,
+        asset_kind.as_deref(),
+        bundle_id.as_deref(),
+    ) {
+        Ok(kind) => kind,
+        Err(message) => return (StatusCode::BAD_REQUEST, message).into_response(),
+    };
+
+    if matches!(asset_kind, UploadAssetKind::StandardImage) && !is_supported_image(Path::new(&safe_filename)) {
         return (StatusCode::BAD_REQUEST, "invalid file type").into_response();
     }
 
@@ -211,7 +345,18 @@ pub async fn upload_image_multipart(mut multipart: Multipart) -> impl IntoRespon
             .into_response();
     }
 
-    let path = format!("{}/{}", GALLERY_DIR, safe_filename);
+    let extension = match extension_for_filename(&safe_filename) {
+        Some(ext) => ext,
+        None => return (StatusCode::BAD_REQUEST, "missing filename extension").into_response(),
+    };
+
+    let stored_filename = match &asset_kind {
+        UploadAssetKind::StandardImage => safe_filename.clone(),
+        UploadAssetKind::LivePhotoStill { bundle_id } => format!("{}.{}", bundle_id, extension),
+        UploadAssetKind::LivePhotoMotion { bundle_id } => format!("{}.{}", bundle_id, extension),
+    };
+
+    let path = format!("{}/{}", GALLERY_DIR, stored_filename);
     if let Err(e) = fs::write(&path, &bytes).await {
         return (
             StatusCode::INTERNAL_SERVER_ERROR,
@@ -220,9 +365,21 @@ pub async fn upload_image_multipart(mut multipart: Multipart) -> impl IntoRespon
             .into_response();
     }
 
-    // Drop any stale thumbnail cache so replaced files regenerate.
-    let thumb_path = PathBuf::from(THUMB_CACHE_DIR).join(thumbnail_filename(&safe_filename));
-    let _ = fs::remove_file(thumb_path).await;
+    if !matches!(asset_kind, UploadAssetKind::LivePhotoMotion { .. }) {
+        // Drop any stale thumbnail cache so replaced files regenerate.
+        let thumb_path = PathBuf::from(THUMB_CACHE_DIR).join(thumbnail_filename(&stored_filename));
+        let _ = fs::remove_file(thumb_path).await;
+    }
 
-    (StatusCode::OK, format!("uploaded {}", path)).into_response()
+    let response_message = match asset_kind {
+        UploadAssetKind::StandardImage => format!("uploaded {}", path),
+        UploadAssetKind::LivePhotoStill { bundle_id } => {
+            format!("uploaded live photo still {} ({})", path, bundle_id)
+        }
+        UploadAssetKind::LivePhotoMotion { bundle_id } => {
+            format!("uploaded live photo motion {} ({})", path, bundle_id)
+        }
+    };
+
+    (StatusCode::OK, response_message).into_response()
 }
