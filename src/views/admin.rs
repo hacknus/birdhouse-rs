@@ -4,8 +4,13 @@ use gloo_net::http::Request;
 #[cfg(target_arch = "wasm32")]
 use js_sys::eval;
 use serde::{Deserialize, Serialize};
+use std::collections::HashSet;
+use std::path::Path;
 
 const IR_LUX_THRESHOLD: f64 = 300.0;
+const DOWNLOAD_SVG: Asset = asset!("/assets/svg/download.svg");
+const DOWNLOAD_ICON_SVG: Asset = asset!("/assets/svg/download-icon.svg");
+const LIVE_PHOTO_SVG: Asset = asset!("/assets/svg/live_photo.svg");
 
 #[cfg(target_arch = "wasm32")]
 use wasm_bindgen::JsCast;
@@ -23,6 +28,72 @@ struct AdminGalleryImage {
     filename: String,
     url: String,
     thumbnail_url: String,
+    motion_url: Option<String>,
+}
+
+fn live_bundle_download_url(filename: &str) -> String {
+    format!("/api/gallery-live-download/{}", filename)
+}
+
+fn live_bundle_download_name(filename: &str) -> String {
+    let stem = Path::new(filename)
+        .file_stem()
+        .and_then(|s| s.to_str())
+        .unwrap_or("live-photo");
+    format!("{}.live-photo.zip", stem)
+}
+
+fn admin_bulk_download_url(token: &str, filenames: &HashSet<String>) -> Option<String> {
+    if filenames.is_empty() {
+        return None;
+    }
+
+    let mut selected = filenames.iter().cloned().collect::<Vec<_>>();
+    selected.sort();
+    let query = selected
+        .into_iter()
+        .map(|filename| format!("filename={}", filename))
+        .collect::<Vec<_>>()
+        .join("&");
+    Some(format!(
+        "/api/admin/gallery-download-selection?token={}&{}",
+        token, query
+    ))
+}
+
+fn format_gallery_timestamp(filename: &str) -> String {
+    let stem = Path::new(filename)
+        .file_stem()
+        .and_then(|s| s.to_str())
+        .unwrap_or(filename)
+        .trim()
+        .to_string();
+
+    if stem.is_empty() {
+        return filename.to_string();
+    }
+
+    let normalized = if stem.len() == 15
+        && (stem.chars().nth(8) == Some('_') || stem.chars().nth(8) == Some('-'))
+    {
+        let mut t = stem.clone();
+        t.remove(8);
+        t
+    } else {
+        stem.clone()
+    };
+
+    if normalized.len() == 14 && normalized.chars().all(|c| c.is_ascii_digit()) {
+        let year = &normalized[0..4];
+        let month = &normalized[4..6];
+        let day = &normalized[6..8];
+        let hour = &normalized[8..10];
+        let minute = &normalized[10..12];
+        let second = &normalized[12..14];
+        format!("{}.{}.{} {}:{}:{}", day, month, year, hour, minute, second)
+    } else {
+        filename.to_string()
+    }
 }
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
@@ -655,6 +726,12 @@ async fn admin_list_gallery_images_server(
     #[cfg(feature = "server")]
     {
         use std::fs;
+        use std::collections::HashMap;
+        #[derive(Default)]
+        struct GalleryBundleParts {
+            still: Option<String>,
+            motion: Option<String>,
+        }
 
         if !crate::admin::admin_validate_session(&token) {
             return Err(ServerFnError::new("Unauthorized"));
@@ -667,7 +744,7 @@ async fn admin_list_gallery_images_server(
         let entries = fs::read_dir(local_cache)
             .map_err(|e| ServerFnError::new(format!("Failed to read directory: {}", e)))?;
 
-        let mut images = Vec::new();
+        let mut bundles: HashMap<String, GalleryBundleParts> = HashMap::new();
         for entry in entries {
             let entry =
                 entry.map_err(|e| ServerFnError::new(format!("Failed to read entry: {}", e)))?;
@@ -678,23 +755,41 @@ async fn admin_list_gallery_images_server(
             if metadata.len() == 0 {
                 continue;
             }
-            let ext = path
-                .extension()
-                .and_then(|s| s.to_str())
-                .unwrap_or("")
-                .to_lowercase();
-            if !matches!(ext.as_str(), "jpg" | "jpeg" | "png" | "gif" | "webp") {
-                continue;
-            }
 
-            if let Some(filename) = path.file_name().and_then(|v| v.to_str()) {
-                images.push(AdminGalleryImage {
-                    filename: filename.to_string(),
-                    url: format!("/gallery-assets/{}", filename),
-                    thumbnail_url: format!("/gallery-thumbnails/{}", filename),
-                });
+            let Some(stem) = path.file_stem().and_then(|value| value.to_str()) else {
+                continue;
+            };
+            let Some(filename) = path.file_name().and_then(|value| value.to_str()) else {
+                continue;
+            };
+            let Some(ext) = path.extension().and_then(|value| value.to_str()) else {
+                continue;
+            };
+
+            let entry = bundles.entry(stem.to_string()).or_default();
+            match ext.to_lowercase().as_str() {
+                "jpg" | "jpeg" | "png" | "gif" | "webp" | "heic" => {
+                    entry.still = Some(filename.to_string());
+                }
+                "mov" | "mp4" => {
+                    entry.motion = Some(filename.to_string());
+                }
+                _ => {}
             }
         }
+
+        let mut images = bundles
+            .into_values()
+            .filter_map(|bundle| {
+                let still = bundle.still?;
+                Some(AdminGalleryImage {
+                    filename: still.clone(),
+                    url: format!("/gallery-assets/{}", still),
+                    thumbnail_url: format!("/gallery-thumbnails/{}", still),
+                    motion_url: bundle.motion.map(|motion| format!("/gallery-assets/{}", motion)),
+                })
+            })
+            .collect::<Vec<_>>();
 
         images.sort_by(|a, b| b.filename.cmp(&a.filename));
         Ok(images)
@@ -732,6 +827,13 @@ async fn admin_delete_gallery_image_server(
         fs::remove_file(&image_path)
             .await
             .map_err(|e| ServerFnError::new(format!("Failed to remove image: {}", e)))?;
+
+        if let Some(stem) = Path::new(&safe_filename).file_stem().and_then(|s| s.to_str()) {
+            for ext in ["mov", "mp4"] {
+                let motion_path = PathBuf::from("./gallery").join(format!("{}.{}", stem, ext));
+                let _ = fs::remove_file(motion_path).await;
+            }
+        }
 
         let thumb_path = PathBuf::from("./gallery-thumbs").join(format!("{}.jpg", safe_filename));
         let _ = fs::remove_file(thumb_path).await;
@@ -939,6 +1041,7 @@ pub fn Admin() -> Element {
     let mut upload_filename = use_signal(|| None::<String>);
     let mut upload_bytes = use_signal(|| None::<Vec<u8>>);
     let mut upload_busy = use_signal(|| false);
+    let mut selected_gallery_images = use_signal(HashSet::<String>::new);
 
     let profile_resource = use_resource(move || {
         let _ = profile_refresh();
@@ -1033,6 +1136,28 @@ pub fn Admin() -> Element {
     use_effect(move || {
         if let Some(device_status) = device_snapshot_for_effect.clone() {
             admin_ir_enabled.set(device_status.ir_enabled);
+        }
+    });
+
+    let gallery_snapshot = gallery_resource
+        .read()
+        .as_ref()
+        .and_then(|result| result.as_ref().ok())
+        .and_then(|value| value.clone());
+    let gallery_snapshot_for_effect = gallery_snapshot.clone();
+    use_effect(move || {
+        if let Some(images) = gallery_snapshot_for_effect.clone() {
+            let available = images
+                .into_iter()
+                .map(|image| image.filename)
+                .collect::<HashSet<_>>();
+            let filtered = selected_gallery_images()
+                .into_iter()
+                .filter(|filename| available.contains(filename))
+                .collect::<HashSet<_>>();
+            if filtered.len() != selected_gallery_images().len() {
+                selected_gallery_images.set(filtered);
+            }
         }
     });
 
@@ -1586,24 +1711,158 @@ pub fn Admin() -> Element {
                     div {
                         class: "rounded-xl border border-slate-700 bg-slate-800 p-6 space-y-4",
                         h2 { class: "text-xl font-medium", "Gallery Manager" }
-                        p { class: "text-slate-300 text-sm", "Delete existing pictures from the gallery." }
+                        p { class: "text-slate-300 text-sm", "Select pictures to delete or download. Live photos include their motion clip in downloads." }
 
                         if let Some(Ok(Some(images))) = gallery_resource.read().as_ref() {
                             if images.is_empty() {
                                 p { class: "text-slate-300", "Gallery is empty." }
                             } else {
+                                div { class: "flex flex-wrap items-center gap-3",
+                                    button {
+                                        r#type: "button",
+                                        class: "rounded-md px-3 py-2 text-sm bg-slate-700 hover:bg-slate-600 text-white",
+                                        onclick: {
+                                            let images = images.clone();
+                                            move |_| {
+                                                let all_selected = images.iter().all(|img| selected_gallery_images().contains(&img.filename));
+                                                if all_selected {
+                                                    selected_gallery_images.set(HashSet::new());
+                                                } else {
+                                                    selected_gallery_images.set(
+                                                        images.iter().map(|img| img.filename.clone()).collect::<HashSet<_>>()
+                                                    );
+                                                }
+                                            }
+                                        },
+                                        if images.iter().all(|img| selected_gallery_images().contains(&img.filename)) {
+                                            "Clear Selection"
+                                        } else {
+                                            "Select All"
+                                        }
+                                    }
+                                    button {
+                                        r#type: "button",
+                                        class: "rounded-md px-3 py-2 text-sm bg-red-600 hover:bg-red-700 text-white disabled:bg-slate-600 disabled:text-slate-300",
+                                        disabled: selected_gallery_images().is_empty(),
+                                        onclick: move |_| {
+                                            let Some(token) = admin_token() else {
+                                                handle_unauthorized();
+                                                return;
+                                            };
+                                            let filenames = selected_gallery_images().into_iter().collect::<Vec<_>>();
+                                            if filenames.is_empty() {
+                                                return;
+                                            }
+                                            status.set(None);
+                                            spawn(async move {
+                                                for filename in filenames {
+                                                    if let Err(err) = admin_delete_gallery_image_server(token.clone(), filename).await {
+                                                        let text = err.to_string();
+                                                        if text.contains("Unauthorized") {
+                                                            handle_unauthorized();
+                                                        } else {
+                                                            status.set(Some(format!("Bulk delete failed: {}", text)));
+                                                        }
+                                                        return;
+                                                    }
+                                                }
+                                                selected_gallery_images.set(HashSet::new());
+                                                gallery_refresh += 1;
+                                                status.set(Some("Selected images removed.".to_string()));
+                                            });
+                                        },
+                                        "Delete Selected"
+                                    }
+                                    button {
+                                        r#type: "button",
+                                        class: "rounded-md px-3 py-2 text-sm bg-emerald-600 hover:bg-emerald-700 text-white disabled:bg-slate-600 disabled:text-slate-300",
+                                        disabled: selected_gallery_images().is_empty(),
+                                        onclick: move |_| {
+                                            let Some(token) = admin_token() else {
+                                                handle_unauthorized();
+                                                return;
+                                            };
+                                            let Some(_download_url) = admin_bulk_download_url(&token, &selected_gallery_images()) else {
+                                                return;
+                                            };
+                                            #[cfg(target_arch = "wasm32")]
+                                            if let Some(window) = web_sys::window() {
+                                                let _ = window.location().set_href(&_download_url);
+                                            }
+                                        },
+                                        "Download Selected"
+                                    }
+                                    p { class: "text-xs text-slate-400", "{selected_gallery_images().len()} selected" }
+                                }
                                 div { class: "grid grid-cols-2 md:grid-cols-3 lg:grid-cols-4 gap-4",
                                     for img in images.iter() {
                                         div {
                                             key: "{img.filename}",
                                             class: "rounded-lg overflow-hidden border border-slate-700 bg-slate-900",
-                                            img {
-                                                src: "{img.thumbnail_url}",
-                                                alt: "{img.filename}",
-                                                class: "w-full h-36 object-cover"
+                                            div { class: "relative",
+                                                img {
+                                                    src: "{img.thumbnail_url}",
+                                                    alt: "{img.filename}",
+                                                    class: "w-full h-36 object-cover"
+                                                }
+                                                input {
+                                                    r#type: "checkbox",
+                                                    class: "absolute right-3 top-3 h-4 w-4 accent-emerald-500",
+                                                    checked: selected_gallery_images().contains(&img.filename),
+                                                    onchange: {
+                                                        let filename = img.filename.clone();
+                                                        move |evt| {
+                                                            let mut next = selected_gallery_images();
+                                                            if evt.checked() {
+                                                                next.insert(filename.clone());
+                                                            } else {
+                                                                next.remove(&filename);
+                                                            }
+                                                            selected_gallery_images.set(next);
+                                                        }
+                                                    }
+                                                }
+                                                if img.motion_url.is_some() {
+                                                    img {
+                                                        src: LIVE_PHOTO_SVG,
+                                                        class: "absolute left-3 top-3 w-5 h-5 invert",
+                                                        alt: "Live photo"
+                                                    }
+                                                }
                                             }
                                             div { class: "p-2 space-y-2",
                                                 p { class: "text-xs text-slate-200 truncate", "{img.filename}" }
+                                                p { class: "text-xs text-slate-400 truncate", "{format_gallery_timestamp(&img.filename)}" }
+                                                div { class: "grid grid-cols-2 gap-2",
+                                                    a {
+                                                        class: "flex items-center justify-center rounded-md px-2 py-2 bg-slate-700 hover:bg-slate-600 text-white",
+                                                        href: "{img.url}",
+                                                        download: "{img.filename}",
+                                                        title: "Download image",
+                                                        onclick: move |evt| evt.stop_propagation(),
+                                                        img {
+                                                            src: DOWNLOAD_SVG,
+                                                            class: "w-4 h-4 invert",
+                                                            alt: "Download image"
+                                                        }
+                                                    }
+                                                    if img.motion_url.is_some() {
+                                                        a {
+                                                            class: "flex items-center justify-center rounded-md px-2 py-2 bg-slate-700 hover:bg-slate-600 text-white",
+                                                            href: "{live_bundle_download_url(&img.filename)}",
+                                                            download: "{live_bundle_download_name(&img.filename)}",
+                                                            title: "Download live photo bundle",
+                                                            onclick: move |evt| evt.stop_propagation(),
+                                                            img {
+                                                                src: DOWNLOAD_ICON_SVG,
+                                                                class: "w-4 h-4 invert",
+                                                                alt: "Download live photo"
+                                                            }
+                                                        }
+                                                    } else {
+                                                        div {}
+                                                    }
+                                                }
                                                 button {
                                                     r#type: "button",
                                                     class: "w-full rounded-md px-2 py-1 text-sm bg-red-600 hover:bg-red-700 text-white",

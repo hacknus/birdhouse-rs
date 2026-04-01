@@ -337,6 +337,7 @@ dependencies = [
  "tokio-postgres",
  "tower",
  "tower-http",
+ "url",
  "uuid",
  "wasm-bindgen",
  "wasm-bindgen-futures",

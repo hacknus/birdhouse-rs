@@ -266,7 +266,8 @@ fn is_private_ip(ip: &IpAddr) -> bool {
 async fn main() {
     use crate::postgres_store::{PostgresTimeSeriesStore, TimeSeriesValue};
     use api::gallery::{
-        download_live_photo_bundle, serve_gallery_thumbnail, upload_image_multipart,
+        admin_download_gallery_selection, download_live_photo_bundle, serve_gallery_thumbnail,
+        upload_image_multipart,
     };
     use axum::extract::DefaultBodyLimit;
     use axum::routing::post;
@@ -1380,6 +1381,10 @@ async fn main() {
         .route(
             "/api/gallery-live-download/{filename}",
             get(download_live_photo_bundle),
+        )
+        .route(
+            "/api/admin/gallery-download-selection",
+            get(admin_download_gallery_selection),
         )
         .route("/api/stream-proxy/{*path}", get(stream_proxy))
         .route("/voegeli", get(|| async { Redirect::temporary("/") }))

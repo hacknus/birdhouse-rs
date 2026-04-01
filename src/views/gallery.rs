@@ -12,6 +12,7 @@ const ARROW_LEFT: Asset = asset!("/assets/svg/arrow-left-svgrepo-com.svg");
 const ARROW_RIGHT: Asset = asset!("/assets/svg/arrow-right-svgrepo-com.svg");
 const DOWNLOAD_SVG: Asset = asset!("/assets/svg/download.svg");
 const DOWNLOAD_ICON_SVG: Asset = asset!("/assets/svg/download-icon.svg");
+const LIVE_PHOTO_SVG: Asset = asset!("/assets/svg/live_photo.svg");
 const THUMB_PLACEHOLDER: &str =
     "data:image/gif;base64,R0lGODlhAQABAIAAAAAAAP///ywAAAAAAQABAAACAUwAOw==";
 
@@ -689,9 +690,10 @@ pub fn Gallery() -> Element {
                                 class: "w-full h-64 object-cover group-hover:scale-105 transition-transform duration-200"
                             }
                             if img.motion_url.is_some() {
-                                div {
-                                    class: "absolute left-3 top-3 rounded-full border border-white border-opacity-30 bg-black bg-opacity-55 px-3 py-1 text-xs font-medium uppercase tracking-[0.25em] text-white",
-                                    "LIVE"
+                                img {
+                                    src: LIVE_PHOTO_SVG,
+                                    class: "absolute left-3 top-3 w-5 h-5 invert",
+                                    alt: "Live photo"
                                 }
                             }
                             div { class: "absolute bottom-0 left-0 right-0 bg-black bg-opacity-50 p-2",

@@ -1,5 +1,5 @@
 use axum::{
-    extract::{Multipart, Path as AxumPath},
+    extract::{Multipart, OriginalUri, Path as AxumPath},
     http::{header, HeaderMap, StatusCode},
     response::IntoResponse,
 };
@@ -165,6 +165,25 @@ fn find_live_motion_path(still_filename: &str) -> Option<PathBuf> {
         .into_iter()
         .map(|ext| PathBuf::from(GALLERY_DIR).join(format!("{}.{}", stem, ext)))
         .find(|path| path.exists())
+}
+
+fn find_live_motion_path_from_gallery(still_filename: &str) -> Option<PathBuf> {
+    let stem = Path::new(still_filename).file_stem()?.to_str()?;
+    ["mov", "mp4"]
+        .into_iter()
+        .map(|ext| PathBuf::from(GALLERY_DIR).join(format!("{}.{}", stem, ext)))
+        .find(|path| path.exists())
+}
+
+fn sanitize_download_filenames(filenames: &[String]) -> Result<Vec<String>, &'static str> {
+    let mut sanitized = Vec::new();
+    for filename in filenames {
+        let Some(safe_filename) = sanitize_gallery_filename(filename) else {
+            return Err("invalid filename");
+        };
+        sanitized.push(safe_filename);
+    }
+    Ok(sanitized)
 }
 
 pub async fn serve_gallery_thumbnail(AxumPath(filename): AxumPath<String>) -> impl IntoResponse {
@@ -352,6 +371,106 @@ pub async fn download_live_photo_bundle(AxumPath(filename): AxumPath<String>) ->
     headers.insert(
         header::CONTENT_DISPOSITION,
         format!("attachment; filename=\"{}\"", bundle_name)
+            .parse()
+            .unwrap(),
+    );
+    (StatusCode::OK, headers, archive).into_response()
+}
+
+pub async fn admin_download_gallery_selection(OriginalUri(uri): OriginalUri) -> impl IntoResponse {
+    let mut token = None::<String>;
+    let mut filenames = Vec::<String>::new();
+
+    if let Some(query) = uri.query() {
+        for (key, value) in url::form_urlencoded::parse(query.as_bytes()) {
+            match key.as_ref() {
+                "token" => token = Some(value.into_owned()),
+                "filename" => filenames.push(value.into_owned()),
+                _ => {}
+            }
+        }
+    }
+
+    let Some(token) = token else {
+        return (StatusCode::BAD_REQUEST, "missing token").into_response();
+    };
+
+    if !crate::admin::admin_validate_session(&token) {
+        return (StatusCode::UNAUTHORIZED, "unauthorized").into_response();
+    }
+
+    let filenames = match sanitize_download_filenames(&filenames) {
+        Ok(filenames) => filenames,
+        Err(message) => return (StatusCode::BAD_REQUEST, message).into_response(),
+    };
+
+    if filenames.is_empty() {
+        return (StatusCode::BAD_REQUEST, "no files selected").into_response();
+    }
+
+    let archive = match tokio::task::spawn_blocking(move || -> Result<Vec<u8>, String> {
+        use std::fs;
+        use std::io::{Cursor, Write};
+        use zip::write::{SimpleFileOptions, ZipWriter};
+
+        let cursor = Cursor::new(Vec::<u8>::new());
+        let mut zip = ZipWriter::new(cursor);
+        let options = SimpleFileOptions::default()
+            .compression_method(zip::CompressionMethod::Deflated);
+
+        for filename in filenames {
+            let still_path = PathBuf::from(GALLERY_DIR).join(&filename);
+            let still_meta = fs::metadata(&still_path)
+                .map_err(|e| format!("failed to stat {}: {}", filename, e))?;
+            if still_meta.len() == 0 || !is_supported_image(&still_path) {
+                return Err(format!("invalid gallery image: {}", filename));
+            }
+
+            let still_bytes = fs::read(&still_path)
+                .map_err(|e| format!("failed to read {}: {}", filename, e))?;
+            zip.start_file(&filename, options)
+                .map_err(|e| format!("failed to add {} to zip: {}", filename, e))?;
+            zip.write_all(&still_bytes)
+                .map_err(|e| format!("failed to write {} to zip: {}", filename, e))?;
+
+            if let Some(motion_path) = find_live_motion_path_from_gallery(&filename) {
+                let motion_name = motion_path
+                    .file_name()
+                    .and_then(|s| s.to_str())
+                    .ok_or("invalid motion filename")?
+                    .to_string();
+                let motion_bytes = fs::read(&motion_path)
+                    .map_err(|e| format!("failed to read {}: {}", motion_name, e))?;
+                zip.start_file(&motion_name, options)
+                    .map_err(|e| format!("failed to add {} to zip: {}", motion_name, e))?;
+                zip.write_all(&motion_bytes)
+                    .map_err(|e| format!("failed to write {} to zip: {}", motion_name, e))?;
+            }
+        }
+
+        let cursor = zip
+            .finish()
+            .map_err(|e| format!("failed to finalize zip: {}", e))?;
+        Ok(cursor.into_inner())
+    })
+    .await
+    {
+        Ok(Ok(bytes)) => bytes,
+        Ok(Err(message)) => return (StatusCode::INTERNAL_SERVER_ERROR, message).into_response(),
+        Err(e) => {
+            return (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                format!("archive task failed: {}", e),
+            )
+                .into_response()
+        }
+    };
+
+    let mut headers = HeaderMap::new();
+    headers.insert(header::CONTENT_TYPE, "application/zip".parse().unwrap());
+    headers.insert(
+        header::CONTENT_DISPOSITION,
+        "attachment; filename=\"gallery-selection.zip\""
             .parse()
             .unwrap(),
     );

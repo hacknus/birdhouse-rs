@@ -47,6 +47,7 @@ reqwest = { version = "0.13", features = ["json"] }
 uuid = { version = "1.19", features = ["v4", "js", "serde"] }
 dashmap = "6.1.0"
 num-traits = "0.2"
+url = "2.5.7"
 image = { version = "0.25.8", default-features = false, features = ["jpeg", "png", "gif", "webp"], optional = true }
 sha2 = { version = "0.10.9", optional = true }
 webauthn-rs = { version = "0.5.3", optional = true }
