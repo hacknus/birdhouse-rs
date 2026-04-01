@@ -5,6 +5,24 @@ use dioxus_router::{use_navigator, use_route, Link, Outlet};
 const NAVBAR_CSS: Asset = asset!("/assets/styling/navbar.css");
 
 #[component]
+fn NavItem(to: Route, label: &'static str, current_route: Route) -> Element {
+    rsx! {
+        Link {
+            to: to.clone(),
+            onclick: move |_| {
+                if current_route == to {
+                    #[cfg(target_arch = "wasm32")]
+                    if let Some(window) = web_sys::window() {
+                        let _ = window.location().reload();
+                    }
+                }
+            },
+            "{label}"
+        }
+    }
+}
+
+#[component]
 pub fn Navbar() -> Element {
     let navigator = use_navigator();
     let current_route = use_route::<Route>();
@@ -35,19 +53,19 @@ pub fn Navbar() -> Element {
 
             nav {
                 class: "nav-links",
-                Link { to: Route::Home {}, "Home" }
-                Link { to: Route::Gallery {}, "Gallery" }
-                Link { to: Route::Birds {}, "Birds" }
+                NavItem { to: Route::Home {}, label: "Home", current_route: current_route.clone() }
+                NavItem { to: Route::Gallery {}, label: "Gallery", current_route: current_route.clone() }
+                NavItem { to: Route::Birds {}, label: "Birds", current_route: current_route.clone() }
                 // Link { to: Route::MakingOf {}, "Making of" }
-                Link { to: Route::HowItWorks {}, "How It Works" }
-                Link { to: Route::Newsletter {}, "Newsletter" }
-                Link { to: Route::VoguGuru {}, "vogu.guru" }
+                NavItem { to: Route::HowItWorks {}, label: "How It Works", current_route: current_route.clone() }
+                NavItem { to: Route::Newsletter {}, label: "Newsletter", current_route: current_route.clone() }
+                NavItem { to: Route::VoguGuru {}, label: "vogu.guru", current_route: current_route.clone() }
 
                 if show_nerds {
-                    Link { to: Route::ForNerds {}, "For Nerds" }
+                    NavItem { to: Route::ForNerds {}, label: "For Nerds", current_route: current_route.clone() }
                 }
                 if show_admin {
-                    Link { to: Route::Admin {}, "Admin" }
+                    NavItem { to: Route::Admin {}, label: "Admin", current_route: current_route.clone() }
                 }
             }
 
