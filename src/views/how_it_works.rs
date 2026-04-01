@@ -15,8 +15,7 @@ pub fn HowItWorks() -> Element {
                     "The birdhouse project is based around a Nistkasten from Vogelwarte Sempbach and upgraded to capture live video and sensor data using a Raspberry Pi. It publishes the stream via mediaMTX, and serves telemetry through this website. Extended live diagnostics are available "
                     a {
                         class: "font-medium underline decoration-zinc-400 underline-offset-2 hover:decoration-zinc-700",
-                        href: "https://linusleo.synology.me/for_nerds",
-                        target: "_blank",
+                        href: "/for_nerds",
                         rel: "noopener noreferrer",
                         "for nerds"
                     }

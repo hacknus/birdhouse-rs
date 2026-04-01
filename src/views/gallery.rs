@@ -11,8 +11,21 @@ use std::path::Path;
 const ARROW_LEFT: Asset = asset!("/assets/svg/arrow-left-svgrepo-com.svg");
 const ARROW_RIGHT: Asset = asset!("/assets/svg/arrow-right-svgrepo-com.svg");
 const DOWNLOAD_SVG: Asset = asset!("/assets/svg/download.svg");
+const DOWNLOAD_ICON_SVG: Asset = asset!("/assets/svg/download-icon.svg");
 const THUMB_PLACEHOLDER: &str =
     "data:image/gif;base64,R0lGODlhAQABAIAAAAAAAP///ywAAAAAAQABAAACAUwAOw==";
+
+fn live_bundle_download_url(filename: &str) -> String {
+    format!("/api/gallery-live-download/{}", filename)
+}
+
+fn live_bundle_download_name(filename: &str) -> String {
+    let stem = Path::new(filename)
+        .file_stem()
+        .and_then(|s| s.to_str())
+        .unwrap_or("live-photo");
+    format!("{}.live-photo.zip", stem)
+}
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 struct GalleryItem {
@@ -270,17 +283,24 @@ fn ImageViewer(
         "flex: 0 0 100vw; display: flex; align-items: center; justify-content: center;";
 
     // inner slide wrapper pads left/right so images don't touch edges and create a small gap between slides
-    let inner_slide_style = format!("width: 100%; padding: 0 {}px; display: flex; align-items: center; justify-content: center;", half_gap);
+    let inner_slide_style = format!(
+        "width: 100%; padding: 0 {}px; display: flex; align-items: center; justify-content: center; position: relative;",
+        half_gap
+    );
 
-    // Ensure image leaves room for navbar (52px) and caption (~120px)
-    let img_style = format!(
-        "width: calc(100vw - {}px); max-height: calc(100vh - 52px - 120px); object-fit: contain; border-radius: 8px;",
-        gap_px
+    let media_frame_style = format!(
+        "position: relative; width: calc(100vw - {}px); max-width: calc(100vw - {}px); height: calc(100vh - 52px - 120px); display: flex; align-items: center; justify-content: center;",
+        gap_px, gap_px
     );
-    let video_style = format!(
-        "position: absolute; inset: 0; width: calc(100vw - {}px); max-height: calc(100vh - 52px - 120px); object-fit: contain; border-radius: 8px;",
-        gap_px
-    );
+    // Ensure image/video leave room for navbar (52px) and caption (~120px)
+    let media_style = "display: block; width: 100%; height: 100%; object-fit: contain; border-radius: 8px;"
+        .to_string();
+    let hidden_media_style = "display: none; width: 100%; height: 100%; object-fit: contain; border-radius: 8px;"
+        .to_string();
+    let visible_video_style = "display: block; position: absolute; inset: 0; width: 100%; height: 100%; object-fit: contain; border-radius: 8px; pointer-events: none; z-index: 1;"
+        .to_string();
+    let hidden_video_style = "display: none; position: absolute; inset: 0; width: 100%; height: 100%; object-fit: contain; border-radius: 8px; pointer-events: none; z-index: 1;"
+        .to_string();
 
     let prev_display = format_display(&images[prev_index].filename);
     let next_display = format_display(&images[next_index].filename);
@@ -332,14 +352,14 @@ fn ImageViewer(
                 title: "Download image",
                 img {
                     src: DOWNLOAD_SVG,
-                    class: "w-6 h-6 invert",
+                    class: "w-10 h-10 invert",
                     alt: "Download"
                 }
             }
 
             if has_live_motion {
                 button {
-                    class: "absolute left-20 text-white text-sm tracking-[0.25em] uppercase z-60 bg-black bg-opacity-40 rounded-lg px-3 py-2 border border-white border-opacity-30",
+                    class: "absolute left-1/2 -translate-x-1/2 text-white text-sm tracking-[0.25em] uppercase z-60 bg-black bg-opacity-40 rounded-lg px-3 py-2 border border-white border-opacity-30",
                     style: "top: 68px;",
                     onmousedown: move |evt| {
                         evt.stop_propagation();
@@ -363,6 +383,22 @@ fn ImageViewer(
                         "LIVE"
                     } else {
                         "Hold LIVE"
+                    }
+                }
+            }
+
+            if has_live_motion {
+                a {
+                    class: "absolute left-4 text-white hover:text-blue-200 transition-colors z-60 bg-black bg-opacity-30 rounded-lg p-2",
+                    style: "top: 124px;",
+                    href: live_bundle_download_url(&current_image.filename),
+                    download: live_bundle_download_name(&current_image.filename),
+                    onclick: move |evt| evt.stop_propagation(),
+                    title: "Download live photo bundle",
+                    img {
+                        src: DOWNLOAD_ICON_SVG,
+                        class: "w-10 h-10 invert",
+                        alt: "Download live photo"
                     }
                 }
             }
@@ -406,16 +442,18 @@ fn ImageViewer(
                             key: "prev-{images[prev_index].filename}",
                             style: "{slide_style}",
                             div { style: "{inner_slide_style}",
-                                img {
-                                    key: "prev-img-{images[prev_index].filename}",
-                                    style: "{img_style}",
-                                    src: if prev_loaded {
-                                        images[prev_index].url.clone()
-                                    } else {
-                                        images[prev_index].thumbnail_url.clone()
-                                    },
-                                    alt: "{prev_display}",
-                                    class: "rounded-lg",
+                                div { style: "{media_frame_style}",
+                                    img {
+                                        key: "prev-img-{images[prev_index].filename}",
+                                        style: "{media_style}",
+                                        src: if prev_loaded {
+                                            images[prev_index].url.clone()
+                                        } else {
+                                            images[prev_index].thumbnail_url.clone()
+                                        },
+                                        alt: "{prev_display}",
+                                        class: "rounded-lg",
+                                    }
                                 }
                             }
                         }
@@ -430,34 +468,46 @@ fn ImageViewer(
                                         motion_active.set(true);
                                     }
                                 },
+                                ontouchstart: move |_| {
+                                    if has_live_motion {
+                                        motion_active.set(true);
+                                    }
+                                },
                                 onmouseup: move |_| motion_active.set(false),
+                                ontouchend: move |_| motion_active.set(false),
                                 onmouseleave: move |_| motion_active.set(false),
-                                img {
-                                    key: "current-img-{current_image.filename}",
-                                    style: "{img_style}",
-                                    src: if current_loaded {
-                                        current_image.url.clone()
-                                    } else {
-                                        current_image.thumbnail_url.clone()
-                                    },
-                                    alt: "{current_display}",
-                                    class: "rounded-lg",
-                                }
-                                if motion_active() {
+                                div { style: "{media_frame_style}",
+                                    img {
+                                        key: "current-img-{current_image.filename}",
+                                        style: if motion_active() && has_live_motion {
+                                            hidden_media_style.clone()
+                                        } else {
+                                            media_style.clone()
+                                        },
+                                        src: if current_loaded {
+                                            current_image.url.clone()
+                                        } else {
+                                            current_image.thumbnail_url.clone()
+                                        },
+                                        alt: "{current_display}",
+                                        class: "rounded-lg",
+                                    }
                                     if let Some(motion_url) = current_image.motion_url.clone() {
                                         video {
                                             key: "live-video-{current_image.filename}",
-                                            style: "{video_style}",
+                                            src: motion_url,
+                                            style: if motion_active() {
+                                                visible_video_style.clone()
+                                            } else {
+                                                hidden_video_style.clone()
+                                            },
                                             autoplay: true,
                                             muted: true,
                                             playsinline: true,
-                                            preload: "metadata",
+                                            loop: true,
+                                            preload: "auto",
                                             poster: current_image.url.clone(),
-                                            onended: move |_| motion_active.set(false),
                                             onclick: move |evt| evt.stop_propagation(),
-                                            source {
-                                                src: motion_url,
-                                            }
                                         }
                                     }
                                 }
@@ -468,16 +518,18 @@ fn ImageViewer(
                             key: "next-{images[next_index].filename}",
                             style: "{slide_style}",
                             div { style: "{inner_slide_style}",
-                                img {
-                                    key: "next-img-{images[next_index].filename}",
-                                    style: "{img_style}",
-                                    src: if next_loaded {
-                                        images[next_index].url.clone()
-                                    } else {
-                                        images[next_index].thumbnail_url.clone()
-                                    },
-                                    alt: "{next_display}",
-                                    class: "rounded-lg",
+                                div { style: "{media_frame_style}",
+                                    img {
+                                        key: "next-img-{images[next_index].filename}",
+                                        style: "{media_style}",
+                                        src: if next_loaded {
+                                            images[next_index].url.clone()
+                                        } else {
+                                            images[next_index].thumbnail_url.clone()
+                                        },
+                                        alt: "{next_display}",
+                                        class: "rounded-lg",
+                                    }
                                 }
                             }
                         }

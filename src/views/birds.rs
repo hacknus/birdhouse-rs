@@ -50,7 +50,7 @@ pub fn Birds() -> Element {
 
                 div { class: "space-y-12",
                     figure {
-                        h2 { class: "text-2xl font-semibold tracking-tight mb-4", "Clip 1" }
+                        h2 { class: "text-2xl font-semibold tracking-tight mb-4", "Female Approach 1" }
                         div { class: "w-full rounded-2xl overflow-hidden",
                             video {
                                 class: "block w-full border-0 outline-none bg-transparent",
@@ -67,7 +67,7 @@ pub fn Birds() -> Element {
                     }
 
                     figure {
-                        h2 { class: "text-2xl font-semibold tracking-tight mb-4", "Clip 2" }
+                        h2 { class: "text-2xl font-semibold tracking-tight mb-4", "Female Approach 2" }
                         div { class: "w-full rounded-2xl overflow-hidden",
                             video {
                                 class: "block w-full border-0 outline-none bg-transparent",
@@ -84,7 +84,7 @@ pub fn Birds() -> Element {
                     }
 
                     figure {
-                        h2 { class: "text-2xl font-semibold tracking-tight mb-4", "Clip 3" }
+                        h2 { class: "text-2xl font-semibold tracking-tight mb-4", "Female Approach 3" }
                         div { class: "w-full rounded-2xl overflow-hidden",
                             video {
                                 class: "block w-full border-0 outline-none bg-transparent",
@@ -101,7 +101,7 @@ pub fn Birds() -> Element {
                     }
 
                     figure {
-                        h2 { class: "text-2xl font-semibold tracking-tight mb-4", "Clip 4" }
+                        h2 { class: "text-2xl font-semibold tracking-tight mb-4", "Male Departure" }
                         div { class: "w-full rounded-2xl overflow-hidden",
                             video {
                                 class: "block w-full border-0 outline-none bg-transparent",

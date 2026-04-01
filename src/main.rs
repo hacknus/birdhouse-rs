@@ -265,7 +265,9 @@ fn is_private_ip(ip: &IpAddr) -> bool {
 #[tokio::main]
 async fn main() {
     use crate::postgres_store::{PostgresTimeSeriesStore, TimeSeriesValue};
-    use api::gallery::{serve_gallery_thumbnail, upload_image_multipart};
+    use api::gallery::{
+        download_live_photo_bundle, serve_gallery_thumbnail, upload_image_multipart,
+    };
     use axum::extract::DefaultBodyLimit;
     use axum::routing::post;
     use axum::Router;
@@ -1374,6 +1376,10 @@ async fn main() {
         .route(
             "/gallery-thumbnails/{filename}",
             get(serve_gallery_thumbnail),
+        )
+        .route(
+            "/api/gallery-live-download/{filename}",
+            get(download_live_photo_bundle),
         )
         .route("/api/stream-proxy/{*path}", get(stream_proxy))
         .route("/voegeli", get(|| async { Redirect::temporary("/") }))

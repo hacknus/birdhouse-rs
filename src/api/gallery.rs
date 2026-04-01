@@ -151,6 +151,22 @@ fn thumbnail_filename(filename: &str) -> String {
     format!("{}.jpg", filename)
 }
 
+fn live_photo_bundle_filename(filename: &str) -> String {
+    let stem = Path::new(filename)
+        .file_stem()
+        .and_then(|s| s.to_str())
+        .unwrap_or("live-photo");
+    format!("{}.live-photo.zip", stem)
+}
+
+fn find_live_motion_path(still_filename: &str) -> Option<PathBuf> {
+    let stem = Path::new(still_filename).file_stem()?.to_str()?;
+    ["mov", "mp4"]
+        .into_iter()
+        .map(|ext| PathBuf::from(GALLERY_DIR).join(format!("{}.{}", stem, ext)))
+        .find(|path| path.exists())
+}
+
 pub async fn serve_gallery_thumbnail(AxumPath(filename): AxumPath<String>) -> impl IntoResponse {
     let Some(safe_filename) = sanitize_gallery_filename(&filename) else {
         return (StatusCode::BAD_REQUEST, "invalid filename").into_response();
@@ -255,6 +271,91 @@ pub async fn serve_gallery_thumbnail(AxumPath(filename): AxumPath<String>) -> im
         "public, max-age=604800, immutable".parse().unwrap(),
     );
     (StatusCode::OK, headers, generated).into_response()
+}
+
+pub async fn download_live_photo_bundle(AxumPath(filename): AxumPath<String>) -> impl IntoResponse {
+    let Some(safe_filename) = sanitize_gallery_filename(&filename) else {
+        return (StatusCode::BAD_REQUEST, "invalid filename").into_response();
+    };
+
+    let still_path = PathBuf::from(GALLERY_DIR).join(&safe_filename);
+    let still_meta = match fs::metadata(&still_path).await {
+        Ok(meta) => meta,
+        Err(_) => return (StatusCode::NOT_FOUND, "image not found").into_response(),
+    };
+    if still_meta.len() == 0 || !is_supported_image(&still_path) {
+        return (StatusCode::NOT_FOUND, "image not found").into_response();
+    }
+
+    let Some(motion_path) = find_live_motion_path(&safe_filename) else {
+        return (StatusCode::NOT_FOUND, "live photo motion not found").into_response();
+    };
+
+    let bundle_name = live_photo_bundle_filename(&safe_filename);
+    let still_path_for_task = still_path.clone();
+    let motion_path_for_task = motion_path.clone();
+
+    let archive = match tokio::task::spawn_blocking(move || -> Result<Vec<u8>, String> {
+        use std::fs;
+        use std::io::{Cursor, Write};
+        use zip::write::{SimpleFileOptions, ZipWriter};
+
+        let still_bytes = fs::read(&still_path_for_task)
+            .map_err(|e| format!("failed to read still image: {}", e))?;
+        let motion_bytes =
+            fs::read(&motion_path_for_task).map_err(|e| format!("failed to read motion: {}", e))?;
+
+        let still_name = still_path_for_task
+            .file_name()
+            .and_then(|s| s.to_str())
+            .ok_or("invalid still filename")?;
+        let motion_name = motion_path_for_task
+            .file_name()
+            .and_then(|s| s.to_str())
+            .ok_or("invalid motion filename")?;
+
+        let cursor = Cursor::new(Vec::<u8>::new());
+        let mut zip = ZipWriter::new(cursor);
+        let options = SimpleFileOptions::default()
+            .compression_method(zip::CompressionMethod::Deflated);
+
+        zip.start_file(still_name, options)
+            .map_err(|e| format!("failed to add still image to zip: {}", e))?;
+        zip.write_all(&still_bytes)
+            .map_err(|e| format!("failed to write still image to zip: {}", e))?;
+
+        zip.start_file(motion_name, options)
+            .map_err(|e| format!("failed to add motion to zip: {}", e))?;
+        zip.write_all(&motion_bytes)
+            .map_err(|e| format!("failed to write motion to zip: {}", e))?;
+
+        let cursor = zip
+            .finish()
+            .map_err(|e| format!("failed to finalize zip: {}", e))?;
+        Ok(cursor.into_inner())
+    })
+    .await
+    {
+        Ok(Ok(bytes)) => bytes,
+        Ok(Err(message)) => return (StatusCode::INTERNAL_SERVER_ERROR, message).into_response(),
+        Err(e) => {
+            return (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                format!("archive task failed: {}", e),
+            )
+                .into_response()
+        }
+    };
+
+    let mut headers = HeaderMap::new();
+    headers.insert(header::CONTENT_TYPE, "application/zip".parse().unwrap());
+    headers.insert(
+        header::CONTENT_DISPOSITION,
+        format!("attachment; filename=\"{}\"", bundle_name)
+            .parse()
+            .unwrap(),
+    );
+    (StatusCode::OK, headers, archive).into_response()
 }
 
 pub async fn upload_image_multipart(mut multipart: Multipart) -> impl IntoResponse {

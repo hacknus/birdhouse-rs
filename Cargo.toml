@@ -50,6 +50,7 @@ num-traits = "0.2"
 image = { version = "0.25.8", default-features = false, features = ["jpeg", "png", "gif", "webp"], optional = true }
 sha2 = { version = "0.10.9", optional = true }
 webauthn-rs = { version = "0.5.3", optional = true }
+zip = { version = "2.4.2", default-features = false, features = ["deflate"], optional = true }
 
 # WASM-only dependencies (only compiled for web target)
 [target.'cfg(target_arch = "wasm32")'.dependencies]
@@ -76,4 +77,5 @@ server = [
     "dep:image",
     "dep:sha2",
     "dep:webauthn-rs",
+    "dep:zip",
 ]
