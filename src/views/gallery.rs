@@ -285,22 +285,22 @@ fn ImageViewer(
 
     // inner slide wrapper pads left/right so images don't touch edges and create a small gap between slides
     let inner_slide_style = format!(
-        "width: 100%; padding: 0 {}px; display: flex; align-items: center; justify-content: center; position: relative;",
+        "width: 100%; padding: 0 {}px; display: flex; align-items: center; justify-content: center; position: relative; -webkit-user-select: none; user-select: none; -webkit-touch-callout: none;",
         half_gap
     );
 
     let media_frame_style = format!(
-        "position: relative; width: calc(100vw - {}px); max-width: calc(100vw - {}px); height: calc(100vh - 52px - 120px); display: flex; align-items: center; justify-content: center;",
+        "position: relative; width: calc(100vw - {}px); max-width: calc(100vw - {}px); height: calc(100vh - 52px - 120px); display: flex; align-items: center; justify-content: center; -webkit-user-select: none; user-select: none; -webkit-touch-callout: none;",
         gap_px, gap_px
     );
     // Ensure image/video leave room for navbar (52px) and caption (~120px)
-    let media_style = "display: block; width: 100%; height: 100%; object-fit: contain; border-radius: 8px;"
+    let media_style = "display: block; width: 100%; height: 100%; object-fit: contain; border-radius: 8px; -webkit-user-drag: none; -webkit-user-select: none; user-select: none; -webkit-touch-callout: none;"
         .to_string();
-    let hidden_media_style = "display: none; width: 100%; height: 100%; object-fit: contain; border-radius: 8px;"
+    let hidden_media_style = "display: none; width: 100%; height: 100%; object-fit: contain; border-radius: 8px; -webkit-user-drag: none; -webkit-user-select: none; user-select: none; -webkit-touch-callout: none;"
         .to_string();
-    let visible_video_style = "display: block; position: absolute; inset: 0; width: 100%; height: 100%; object-fit: contain; border-radius: 8px; pointer-events: none; z-index: 1;"
+    let visible_video_style = "display: block; position: absolute; inset: 0; width: 100%; height: 100%; object-fit: contain; border-radius: 8px; pointer-events: none; z-index: 1; -webkit-user-select: none; user-select: none; -webkit-touch-callout: none;"
         .to_string();
-    let hidden_video_style = "display: none; position: absolute; inset: 0; width: 100%; height: 100%; object-fit: contain; border-radius: 8px; pointer-events: none; z-index: 1;"
+    let hidden_video_style = "display: none; position: absolute; inset: 0; width: 100%; height: 100%; object-fit: contain; border-radius: 8px; pointer-events: none; z-index: 1; -webkit-user-select: none; user-select: none; -webkit-touch-callout: none;"
         .to_string();
 
     let prev_display = format_display(&images[prev_index].filename);
@@ -310,13 +310,14 @@ fn ImageViewer(
         // Position viewer under navbar by setting top to 52px so navbar top remains visible.
         div {
             class: "backdrop fixed bg-black bg-opacity-90 z-50 flex items-center justify-center",
-            style: "top: 52px; left: 0; right: 0; bottom: 0;",
+            style: "top: 52px; left: 0; right: 0; bottom: 0; -webkit-user-select: none; user-select: none; -webkit-touch-callout: none;",
             tabindex: 0,
             "data-viewer": "true",
             onkeydown: handle_keydown,
             ontouchstart: handle_touchstart,
             ontouchmove: handle_touchmove,
             ontouchend: handle_touchend,
+            oncontextmenu: move |evt| evt.prevent_default(),
             onclick: move |_evt: MouseEvent| on_close.call(()),
             onmounted: move |_| {
                 #[cfg(target_arch = "wasm32")]
@@ -407,6 +408,7 @@ fn ImageViewer(
             // viewer container uses available height under navbar
             div {
                 class: "viewer-content w-screen max-h-[90vh] overflow-hidden relative",
+                oncontextmenu: move |evt| evt.prevent_default(),
                 onclick: move |evt: MouseEvent| evt.stop_propagation(),
                 div {
                     class: "relative",
@@ -447,6 +449,7 @@ fn ImageViewer(
                                     img {
                                         key: "prev-img-{images[prev_index].filename}",
                                         style: "{media_style}",
+                                        draggable: "false",
                                         src: if prev_loaded {
                                             images[prev_index].url.clone()
                                         } else {
@@ -485,6 +488,7 @@ fn ImageViewer(
                                         } else {
                                             media_style.clone()
                                         },
+                                        draggable: "false",
                                         src: if current_loaded {
                                             current_image.url.clone()
                                         } else {
@@ -508,6 +512,7 @@ fn ImageViewer(
                                             loop: true,
                                             preload: "auto",
                                             poster: current_image.url.clone(),
+                                            oncontextmenu: move |evt| evt.prevent_default(),
                                             onclick: move |evt| evt.stop_propagation(),
                                         }
                                     }
@@ -523,6 +528,7 @@ fn ImageViewer(
                                     img {
                                         key: "next-img-{images[next_index].filename}",
                                         style: "{media_style}",
+                                        draggable: "false",
                                         src: if next_loaded {
                                             images[next_index].url.clone()
                                         } else {

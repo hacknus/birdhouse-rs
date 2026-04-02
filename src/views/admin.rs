@@ -1132,12 +1132,14 @@ pub fn Admin() -> Element {
         .as_ref()
         .and_then(|result| result.as_ref().ok())
         .and_then(|value| value.clone());
-    let device_snapshot_for_effect = device_snapshot.clone();
-    use_effect(move || {
-        if let Some(device_status) = device_snapshot_for_effect.clone() {
-            admin_ir_enabled.set(device_status.ir_enabled);
-        }
-    });
+    let displayed_admin_ir_enabled = if admin_ir_busy() {
+        admin_ir_enabled()
+    } else {
+        device_snapshot
+            .as_ref()
+            .map(|device_status| device_status.ir_enabled)
+            .unwrap_or(admin_ir_enabled())
+    };
 
     let gallery_snapshot = gallery_resource
         .read()
@@ -1501,7 +1503,7 @@ pub fn Admin() -> Element {
                                         r#type: "button",
                                         class: format!(
                                             "relative inline-flex h-6 w-12 items-center rounded-full transition-colors {}",
-                                            if admin_ir_enabled() {
+                                            if displayed_admin_ir_enabled {
                                                 "bg-blue-500"
                                             } else {
                                                 "bg-gray-600"
@@ -1520,8 +1522,8 @@ pub fn Admin() -> Element {
 
                                             admin_ir_busy.set(true);
                                             status.set(None);
-                                            let previous_state = admin_ir_enabled();
-                                            let next_state = !admin_ir_enabled();
+                                            let previous_state = displayed_admin_ir_enabled;
+                                            let next_state = !displayed_admin_ir_enabled;
                                             let request_id = admin_ir_request_id() + 1;
                                             admin_ir_request_id.set(request_id);
                                             admin_ir_enabled.set(next_state);
@@ -1576,7 +1578,7 @@ pub fn Admin() -> Element {
                                         span {
                                             class: format!(
                                                 "inline-block h-4 w-4 transform rounded-full bg-white transition-transform {}",
-                                                if admin_ir_enabled() { "translate-x-7" } else { "translate-x-1" }
+                                                if displayed_admin_ir_enabled { "translate-x-7" } else { "translate-x-1" }
                                             )
                                         }
                                     }
