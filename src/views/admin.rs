@@ -829,9 +829,20 @@ async fn admin_delete_gallery_image_server(
             .map_err(|e| ServerFnError::new(format!("Failed to remove image: {}", e)))?;
 
         if let Some(stem) = Path::new(&safe_filename).file_stem().and_then(|s| s.to_str()) {
-            for ext in ["mov", "mp4"] {
-                let motion_path = PathBuf::from("./gallery").join(format!("{}.{}", stem, ext));
-                let _ = fs::remove_file(motion_path).await;
+            if let Ok(mut entries) = fs::read_dir("./gallery").await {
+                while let Ok(Some(entry)) = entries.next_entry().await {
+                    let path = entry.path();
+                    let Some(entry_stem) = path.file_stem().and_then(|s| s.to_str()) else {
+                        continue;
+                    };
+                    let Some(ext) = path.extension().and_then(|s| s.to_str()) else {
+                        continue;
+                    };
+
+                    if entry_stem == stem && matches!(ext.to_lowercase().as_str(), "mov" | "mp4") {
+                        let _ = fs::remove_file(path).await;
+                    }
+                }
             }
         }
 
