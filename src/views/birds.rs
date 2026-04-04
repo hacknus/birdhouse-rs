@@ -8,6 +8,7 @@ const BIRD_POSTER_ONE: Asset = asset!("/public/birdie_anflug.jpg");
 const BIRD_POSTER_TWO: Asset = asset!("/public/birdie_anflug2.jpg");
 const BIRD_POSTER_THREE: Asset = asset!("/public/birdie_anflug3.jpg");
 const BIRD_POSTER_FOUR: Asset = asset!("/public/birdie_takeoff.jpg");
+const BIRD_BANNER: Asset = asset!("/public/bird_drawing.png");
 
 pub fn Birds() -> Element {
     rsx! {
@@ -17,6 +18,15 @@ pub fn Birds() -> Element {
                 p { class: "w-full text-base md:text-lg leading-8 text-zinc-700 mb-10",
                     style: "text-align: justify;",
                     "A small collection of bird clips recorded in and around the birdhouse."
+                }
+
+                figure { class: "mb-12",
+                    img {
+                        class: "w-full h-auto",
+                        src: BIRD_BANNER,
+                        alt: "Female and male great Tits"
+                    }
+                    figcaption { class: "mt-2 text-sm text-zinc-600", "The male Great Tit (left) can be distinguished from the female Great Tit by the thicker strip on the chest." }
                 }
 
                 // div { class: "grid grid-cols-1 md:grid-cols-2 gap-8 items-start mb-12",

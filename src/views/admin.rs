@@ -7,6 +7,8 @@ use serde::{Deserialize, Serialize};
 use std::collections::HashSet;
 use std::path::Path;
 
+use crate::views::gallery_client::{lock_scroll, save_scroll_position, unlock_scroll};
+
 const IR_LUX_THRESHOLD: f64 = 300.0;
 const DOWNLOAD_SVG: Asset = asset!("/assets/svg/download.svg");
 const DOWNLOAD_ICON_SVG: Asset = asset!("/assets/svg/download-icon.svg");
@@ -93,6 +95,72 @@ fn format_gallery_timestamp(filename: &str) -> String {
         format!("{}.{}.{} {}:{}:{}", day, month, year, hour, minute, second)
     } else {
         filename.to_string()
+    }
+}
+
+#[component]
+fn AdminGalleryViewer(
+    image: AdminGalleryImage,
+    initial_scroll_y: f64,
+    on_close: EventHandler<()>,
+) -> Element {
+    use_effect(move || {
+        lock_scroll(initial_scroll_y);
+    });
+
+    use_drop(move || {
+        unlock_scroll(initial_scroll_y);
+    });
+
+    let display_label = format_gallery_timestamp(&image.filename);
+
+    rsx! {
+        div {
+            class: "fixed inset-0 z-[100] bg-black bg-opacity-90 flex items-center justify-center",
+            style: "top: 52px; -webkit-user-select: none; user-select: none; -webkit-touch-callout: none;",
+            onclick: move |_| on_close.call(()),
+            oncontextmenu: move |evt| evt.prevent_default(),
+
+            button {
+                class: "absolute right-4 text-white text-3xl hover:text-red-500 transition-colors z-[110] bg-black bg-opacity-30 rounded-lg px-3 py-2",
+                style: "top: 16px;",
+                onclick: move |evt| {
+                    evt.stop_propagation();
+                    on_close.call(());
+                },
+                "✕"
+            }
+
+            div {
+                class: "w-full max-w-6xl px-4 py-6 flex flex-col items-center gap-4",
+                onclick: move |evt: MouseEvent| evt.stop_propagation(),
+                oncontextmenu: move |evt| evt.prevent_default(),
+                if let Some(motion_url) = image.motion_url.clone() {
+                    video {
+                        src: motion_url,
+                        class: "max-w-full max-h-[calc(100vh-180px)] rounded-lg object-contain",
+                        autoplay: true,
+                        muted: true,
+                        playsinline: true,
+                        loop: true,
+                        preload: "auto",
+                        poster: image.url.clone(),
+                    }
+                } else {
+                    img {
+                        src: image.url.clone(),
+                        alt: image.filename.clone(),
+                        class: "max-w-full max-h-[calc(100vh-180px)] rounded-lg object-contain",
+                        draggable: "false",
+                    }
+                }
+                div { class: "text-center space-y-1",
+                    p { class: "text-sm text-white break-all", "{image.filename}" }
+                    p { class: "text-xs text-slate-300", "{display_label}" }
+                }
+            }
+        }
+
     }
 }
 
@@ -1053,6 +1121,8 @@ pub fn Admin() -> Element {
     let mut upload_bytes = use_signal(|| None::<Vec<u8>>);
     let mut upload_busy = use_signal(|| false);
     let mut selected_gallery_images = use_signal(HashSet::<String>::new);
+    let mut selected_gallery_preview = use_signal(|| None::<AdminGalleryImage>);
+    let mut selected_gallery_scroll_y = use_signal(|| 0.0f64);
 
     let profile_resource = use_resource(move || {
         let _ = profile_refresh();
@@ -1811,7 +1881,14 @@ pub fn Admin() -> Element {
                                     for img in images.iter() {
                                         div {
                                             key: "{img.filename}",
-                                            class: "rounded-lg overflow-hidden border border-slate-700 bg-slate-900",
+                                            class: "rounded-lg overflow-hidden border border-slate-700 bg-slate-900 cursor-pointer",
+                                            onclick: {
+                                                let image = img.clone();
+                                                move |_| {
+                                                    selected_gallery_scroll_y.set(save_scroll_position());
+                                                    selected_gallery_preview.set(Some(image.clone()));
+                                                }
+                                            },
                                             div { class: "relative",
                                                 img {
                                                     src: "{img.thumbnail_url}",
@@ -1820,14 +1897,15 @@ pub fn Admin() -> Element {
                                                 }
                                                 input {
                                                     r#type: "checkbox",
-                                                    class: "absolute right-3 top-3 h-4 w-4 accent-emerald-500",
-                                                    checked: selected_gallery_images().contains(&img.filename),
-                                                    onchange: {
-                                                        let filename = img.filename.clone();
-                                                        move |evt| {
-                                                            let mut next = selected_gallery_images();
-                                                            if evt.checked() {
-                                                                next.insert(filename.clone());
+                                                        class: "absolute right-3 top-3 h-4 w-4 accent-emerald-500",
+                                                        checked: selected_gallery_images().contains(&img.filename),
+                                                        onchange: {
+                                                            let filename = img.filename.clone();
+                                                            move |evt| {
+                                                                evt.stop_propagation();
+                                                                let mut next = selected_gallery_images();
+                                                                if evt.checked() {
+                                                                    next.insert(filename.clone());
                                                             } else {
                                                                 next.remove(&filename);
                                                             }
@@ -1881,7 +1959,8 @@ pub fn Admin() -> Element {
                                                     class: "w-full rounded-md px-2 py-1 text-sm bg-red-600 hover:bg-red-700 text-white",
                                                     onclick: {
                                                         let filename = img.filename.clone();
-                                                        move |_| {
+                                                        move |evt| {
+                                                            evt.stop_propagation();
                                                             let Some(token) = admin_token() else {
                                                                 handle_unauthorized();
                                                                 return;
@@ -1922,6 +2001,14 @@ pub fn Admin() -> Element {
                         }
                     }
                 }
+            }
+        }
+
+        if let Some(image) = selected_gallery_preview() {
+            AdminGalleryViewer {
+                image,
+                initial_scroll_y: selected_gallery_scroll_y(),
+                on_close: move |_| selected_gallery_preview.set(None),
             }
         }
     }
