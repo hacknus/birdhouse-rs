@@ -7,7 +7,6 @@ use serde::{Deserialize, Serialize};
 use std::collections::HashSet;
 use std::path::Path;
 
-use crate::views::gallery_client::{lock_scroll, save_scroll_position, unlock_scroll};
 
 const IR_LUX_THRESHOLD: f64 = 300.0;
 const DOWNLOAD_SVG: Asset = asset!("/assets/svg/download.svg");
@@ -95,72 +94,6 @@ fn format_gallery_timestamp(filename: &str) -> String {
         format!("{}.{}.{} {}:{}:{}", day, month, year, hour, minute, second)
     } else {
         filename.to_string()
-    }
-}
-
-#[component]
-fn AdminGalleryViewer(
-    image: AdminGalleryImage,
-    initial_scroll_y: f64,
-    on_close: EventHandler<()>,
-) -> Element {
-    use_effect(move || {
-        lock_scroll(initial_scroll_y);
-    });
-
-    use_drop(move || {
-        unlock_scroll(initial_scroll_y);
-    });
-
-    let display_label = format_gallery_timestamp(&image.filename);
-
-    rsx! {
-        div {
-            class: "fixed inset-0 z-[100] bg-black bg-opacity-90 flex items-center justify-center",
-            style: "top: 52px; -webkit-user-select: none; user-select: none; -webkit-touch-callout: none;",
-            onclick: move |_| on_close.call(()),
-            oncontextmenu: move |evt| evt.prevent_default(),
-
-            button {
-                class: "absolute right-4 text-white text-3xl hover:text-red-500 transition-colors z-[110] bg-black bg-opacity-30 rounded-lg px-3 py-2",
-                style: "top: 16px;",
-                onclick: move |evt| {
-                    evt.stop_propagation();
-                    on_close.call(());
-                },
-                "✕"
-            }
-
-            div {
-                class: "w-full max-w-6xl px-4 py-6 flex flex-col items-center gap-4",
-                onclick: move |evt: MouseEvent| evt.stop_propagation(),
-                oncontextmenu: move |evt| evt.prevent_default(),
-                if let Some(motion_url) = image.motion_url.clone() {
-                    video {
-                        src: motion_url,
-                        class: "max-w-full max-h-[calc(100vh-180px)] rounded-lg object-contain",
-                        autoplay: true,
-                        muted: true,
-                        playsinline: true,
-                        loop: true,
-                        preload: "auto",
-                        poster: image.url.clone(),
-                    }
-                } else {
-                    img {
-                        src: image.url.clone(),
-                        alt: image.filename.clone(),
-                        class: "max-w-full max-h-[calc(100vh-180px)] rounded-lg object-contain",
-                        draggable: "false",
-                    }
-                }
-                div { class: "text-center space-y-1",
-                    p { class: "text-sm text-white break-all", "{image.filename}" }
-                    p { class: "text-xs text-slate-300", "{display_label}" }
-                }
-            }
-        }
-
     }
 }
 
@@ -1121,8 +1054,6 @@ pub fn Admin() -> Element {
     let mut upload_bytes = use_signal(|| None::<Vec<u8>>);
     let mut upload_busy = use_signal(|| false);
     let mut selected_gallery_images = use_signal(HashSet::<String>::new);
-    let mut selected_gallery_preview = use_signal(|| None::<AdminGalleryImage>);
-    let mut selected_gallery_scroll_y = use_signal(|| 0.0f64);
 
     let profile_resource = use_resource(move || {
         let _ = profile_refresh();
@@ -1881,19 +1812,48 @@ pub fn Admin() -> Element {
                                     for img in images.iter() {
                                         div {
                                             key: "{img.filename}",
-                                            class: "rounded-lg overflow-hidden border border-slate-700 bg-slate-900 cursor-pointer",
-                                            onclick: {
-                                                let image = img.clone();
-                                                move |_| {
-                                                    selected_gallery_scroll_y.set(save_scroll_position());
-                                                    selected_gallery_preview.set(Some(image.clone()));
-                                                }
-                                            },
+                                            class: "rounded-lg overflow-hidden border border-slate-700 bg-slate-900",
                                             div { class: "relative",
-                                                img {
-                                                    src: "{img.thumbnail_url}",
-                                                    alt: "{img.filename}",
-                                                    class: "w-full h-36 object-cover"
+                                                if let Some(motion_url) = img.motion_url.clone() {
+                                                    video {
+                                                        id: "adv-{img.filename}",
+                                                        src: "{motion_url}",
+                                                        class: "w-full h-36 object-cover",
+                                                        muted: true,
+                                                        playsinline: true,
+                                                        loop: true,
+                                                        preload: "auto",
+                                                        poster: "{img.thumbnail_url}",
+                                                        onmousedown: {
+                                                            let filename = img.filename.clone();
+                                                            move |evt| {
+                                                                evt.stop_propagation();
+                                                                #[cfg(target_arch = "wasm32")]
+                                                                let _ = eval(&format!("document.getElementById('adv-{}').play()", filename));
+                                                            }
+                                                        },
+                                                        onmouseup: {
+                                                            let filename = img.filename.clone();
+                                                            move |evt| {
+                                                                evt.stop_propagation();
+                                                                #[cfg(target_arch = "wasm32")]
+                                                                let _ = eval(&format!("var v=document.getElementById('adv-{}');v.pause();v.currentTime=0;", filename));
+                                                            }
+                                                        },
+                                                        onmouseleave: {
+                                                            let filename = img.filename.clone();
+                                                            move |_| {
+                                                                #[cfg(target_arch = "wasm32")]
+                                                                let _ = eval(&format!("var v=document.getElementById('adv-{}');v.pause();v.currentTime=0;", filename));
+                                                            }
+                                                        },
+                                                    }
+                                                } else {
+                                                    img {
+                                                        src: "{img.thumbnail_url}",
+                                                        alt: "{img.filename}",
+                                                        class: "w-full h-36 object-cover"
+                                                    }
                                                 }
                                                 input {
                                                     r#type: "checkbox",
@@ -1911,13 +1871,6 @@ pub fn Admin() -> Element {
                                                             }
                                                             selected_gallery_images.set(next);
                                                         }
-                                                    }
-                                                }
-                                                if img.motion_url.is_some() {
-                                                    img {
-                                                        src: LIVE_PHOTO_SVG,
-                                                        class: "absolute left-3 top-3 w-5 h-5 invert",
-                                                        alt: "Live photo"
                                                     }
                                                 }
                                             }
@@ -2004,12 +1957,5 @@ pub fn Admin() -> Element {
             }
         }
 
-        if let Some(image) = selected_gallery_preview() {
-            AdminGalleryViewer {
-                image,
-                initial_scroll_y: selected_gallery_scroll_y(),
-                on_close: move |_| selected_gallery_preview.set(None),
-            }
-        }
     }
 }
