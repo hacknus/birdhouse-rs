@@ -8,7 +8,7 @@ use std::collections::HashSet;
 use std::path::Path;
 
 
-const IR_LUX_THRESHOLD: f64 = 300.0;
+const IR_LUX_THRESHOLD: f64 = 3.0;
 const DOWNLOAD_SVG: Asset = asset!("/assets/svg/download.svg");
 const DOWNLOAD_ICON_SVG: Asset = asset!("/assets/svg/download-icon.svg");
 const LIVE_PHOTO_SVG: Asset = asset!("/assets/svg/live_photo.svg");
